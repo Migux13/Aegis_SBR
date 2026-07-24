@@ -17,17 +17,26 @@ function M:BuildBody(ui, parent)
     local L = ui:NewLayout(parent)
     local function set(key) return function(v) if ui.buf then ui.buf[key] = v; ui:Refresh() end end end
 
+    -- Surprise Attack belongs with the builders (it AWARDS a combo point), but
+    -- it cannot go in the dropdown: that picks the builder you spam, while
+    -- Surprise Attack is only castable inside the target's dodge window, so it
+    -- rides on top of whichever builder is chosen rather than replacing it.
     L:Header("Rotation")
     self.builderDD = L:Dropdown("builder", "Builder", 170, set("builder"))
+    self.saRow = L:Row{ key = "useSurpriseAttack", label = "Surprise Attack", spell = "Surprise Attack", onToggle = set("useSurpriseAttack") }
+
+    -- Riposte spends no combo points and builds none - a pure reactive strike.
+    L:Header("Reactives")
+    self.ripRow = L:Row{ key = "useRiposte", label = "Riposte", spell = "Riposte", onToggle = set("useRiposte") }
 
     L:Header("Finishers")
     self.sndRow = L:Row{ key = "useSnd", label = "Slice and Dice", spell = "Slice and Dice", onToggle = set("useSnd") }
     self.envRow = L:Row{ key = "useEnvenom", label = "Envenom", spell = "Envenom", onToggle = set("useEnvenom") }
-    self.rupRow = L:Row{ key = "useRupture", label = "Rupture", spell = "Rupture", onToggle = set("useRupture") }
-    self.ripRow = L:Row{ key = "useRiposte", label = "Riposte", spell = "Riposte", onToggle = set("useRiposte") }
-    self.saRow = L:Row{ key = "useSurpriseAttack", label = "Surprise Attack", spell = "Surprise Attack", onToggle = set("useSurpriseAttack") }
+    self.rupRow = L:Row{ key = "useRupture", label = "Rupture at CP", spell = "Rupture", onToggle = set("useRupture"),
+        slider = { key = "ruptureCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("ruptureCP") } }
     self.cpRow = L:Row{ label = "Eviscerate at CP",
         slider = { key = "cpFinish", min = 1, max = 5, step = 1, suffix = "", onChange = set("cpFinish") } }
+    self.evisOnlyRow = L:Row{ key = "evisExecuteOnly", label = "Eviscerate only in execute", onToggle = set("evisExecuteOnly") }
     self.execRow = L:Row{ key = "useExecute", label = "Execute low-HP targets", onToggle = set("useExecute"),
         slider = { key = "executeHpPct", min = 1, max = 30, step = 1, suffix = "%", onChange = set("executeHpPct") } }
 
@@ -65,13 +74,15 @@ function M:BuildBody(ui, parent)
 
     L:Finish()
 
-    ui:Tip(self.builderDD, "Builder", "The combo point builder. Auto picks Noxious Assault if known, else Sinister Strike.")
+    ui:Tip(self.builderDD, "Builder", "The combo point builder you spam. Auto picks Noxious Assault if known, else Sinister Strike.")
+    ui:Tip(self.saRow.cb, "Surprise Attack", "An extra builder on top of the one above: it awards a combo point, but is only castable right after the TARGET dodges you, inside a short window.", "Combat capstone (20 points). Guaranteed hit - can't be blocked, dodged or parried. Takes priority when the window is open, since missing it wastes the proc.")
+    ui:Tip(self.ripRow.cb, "Riposte", "Cast right after a parry, inside the short Riposte window. Neither spends nor builds combo points.")
     ui:Tip(self.sndRow.cb, "Slice and Dice", "Kept up: refreshed cheaply at 1 combo point, dumped with Eviscerate above that.")
     ui:Tip(self.envRow.cb, "Envenom", "Kept up the same way as Slice and Dice (Turtle ability).")
-    ui:Tip(self.rupRow.cb, "Rupture", "Applied as a finisher at your combo-point threshold when it falls off the target.", "With the Assassination talent Taste for Blood, keeping it up is also a stacking damage buff.")
-    ui:Tip(self.ripRow.cb, "Riposte", "Cast right after a parry, inside the short Riposte window.")
-    ui:Tip(self.saRow.cb, "Surprise Attack", "Cast right after the TARGET dodges you, inside a short window (mirror image of Riposte).", "Combat capstone (20 points). Guaranteed hit, cheap, awards a combo point.")
-    ui:Tip(self.cpRow.slider, "Finisher combo points", "Eviscerate is used once combo points reach this number.")
+    ui:Tip(self.rupRow.cb, "Rupture", "With the Assassination talent Taste for Blood it is kept up for that melee-damage BUFF (not the bleed) and takes priority over the other finishers. Without the talent it simply maintains the bleed on your target.", "The slider is its own combo-point threshold, separate from Eviscerate's on purpose: only Rupture's payoff scales with the points spent (2% damage per point), and sharing Eviscerate's higher threshold meant it never got cast at all.")
+    ui:Tip(self.rupRow.slider, "Rupture at CP", "Combo points required before Rupture is cast. Lower = renewed more reliably but a weaker buff; higher = stronger buff but it may never be reached, since every buff refresh resets you to 1 point.", "Recommended: 5. A recast simply overwrites the buff at whatever combo points it was cast with, so anything below 5 risks replacing an existing 10% Taste for Blood buff with a weaker one the moment Rupture comes due.")
+    ui:Tip(self.evisOnlyRow.cb, "Eviscerate only in execute", "Reserve Eviscerate for the execute phase, so every other combo point goes into maintaining your buffs instead of direct damage.", "Useful once you maintain several buffs: refreshes keep resetting your points, so a normal Eviscerate threshold is rarely reached anyway.")
+    ui:Tip(self.cpRow.slider, "Finisher combo points", "Eviscerate is used once combo points reach this number.", "Greyed out while \"Eviscerate only in execute\" is on, since that setting bypasses this threshold entirely.")
     ui:Tip(self.execRow.cb, "Execute low-HP targets", "Below the health value on the right, Eviscerate fires with whatever combo points are on hand (at least 1) instead of waiting for the normal threshold.", "Ruthlessness guarantees a combo point after any finisher, so this rarely goes unused once a fight is underway.")
     ui:Tip(self.execRow.slider, "Execute below", "Target health percent under which Eviscerate finishes early rather than risk combo points going to waste on a kill.")
     ui:Tip(self.cdRow.cb, "Pop cooldowns", "Use Adrenaline Rush and Blade Flurry every press (off the global cooldown).")
@@ -111,6 +122,13 @@ function M:RefreshBody(ui, buf)
     local cpv = buf.cpFinish or 4
     self.cpRow.slider:SetValue(cpv)
     if self.cpRow.slider.valText then self.cpRow.slider.valText:SetText(tostring(cpv)) end
+
+    local rupv = buf.ruptureCP or 3
+    self.rupRow.slider:SetValue(rupv)
+    if self.rupRow.slider.valText then self.rupRow.slider.valText:SetText(tostring(rupv)) end
+
+    ui:BindCheck(self.evisOnlyRow, buf.evisExecuteOnly)
+    ui:SliderEnable(self.cpRow.slider, not buf.evisExecuteOnly)
 
     ui:BindCheck(self.execRow, buf.useExecute)
     local execv = buf.executeHpPct or 10

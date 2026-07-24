@@ -27,14 +27,21 @@ M.uiHeight = 430
 -- Chat output is shared in the core; this shim keeps call sites unchanged.
 local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
 
--- Buff duration table (seconds, index = combo points 1-5).
--- Defaults assume the Slice and Dice duration talent is fully talented
--- (+45%). Without it, use the commented base line so the refresh is not
--- timed too late.
-local SND_DUR = {13.05, 17.4, 21.75, 26.1, 30.45}
--- local SND_DUR = {9, 12, 15, 18, 21}   -- vanilla base, no talent
-local ENV_DUR = {12, 16, 20, 24, 28}
+-- Slice and Dice, Envenom and the Rupture proxy buff (Taste for Blood) are all
+-- read straight off the real buff timer (GetPlayerBuffTimeLeft via
+-- Aegis_SBR:BuffTime) - in-game /sbr trace confirmed all three resolve to a
+-- live countdown, not just presence, so no stamped/estimated duration table
+-- is needed for any of them (previously SnD and Envenom used a hardcoded
+-- duration table stamped at cast time; that guess is gone now that the real
+-- timer reads back reliably).
+local TALENT_TASTE = "Taste for Blood"
 local BUFF_RENEW = 5    -- a buff counts as expiring soon below this remaining time
+-- Taste for Blood gets a wider renew window than the other two buffs: Slice and
+-- Dice and Envenom can be refreshed at any combo point, while Rupture waits for
+-- its own (higher) point threshold, so its opportunity comes around far less
+-- often. Renewing from roughly half the buff's life onward makes sure such a
+-- moment falls inside the window instead of after the buff has already lapsed.
+local TFB_RENEW = 10
 
 -- Builder universe, used by the UI to offer only learned ones
 M.BUILDERS = { "Sinister Strike", "Backstab", "Hemorrhage", "Noxious Assault", "Mutilate" }
@@ -43,19 +50,23 @@ M.templates = {
     starter = {  -- valid for any rogue, only Slice and Dice upkeep
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = false,
-        useExecute = false, executeHpPct = 10,
+        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
         cpFinish = 4, popCDs = false, autoCDElite = false,
     },
     assassination = {
         builder = "", useSnd = true, useEnvenom = true, useRupture = true, useRiposte = true,
         useSurpriseAttack = false,
-        useExecute = false, executeHpPct = 10,
+        -- ruptureCP = 5 (not lower): Taste for Blood's magnitude is fixed at whatever combo
+        -- points Rupture was cast with (2% per point) and a recast overwrites it outright, no
+        -- keep-the-stronger-one logic - so anything below 5 risks replacing an existing 10%
+        -- buff with a weaker one the moment Rupture comes due (Discord-reported, confirmed).
+        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 5,
         cpFinish = 4, popCDs = false, autoCDElite = false,
     },
     combat = {
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = true,
-        useExecute = false, executeHpPct = 10,
+        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
         cpFinish = 5, popCDs = false, autoCDElite = true,
     },
 }
@@ -83,6 +94,15 @@ function M:NormalizeProfile(c)
     -- combo point after any finisher, so there is always something to spend.
     if c.useExecute == nil then c.useExecute = false end
     if c.executeHpPct == nil then c.executeHpPct = 10 end
+    -- Rupture carries its OWN combo-point threshold, deliberately separate from
+    -- Eviscerate's: only Rupture's payoff (the Taste for Blood damage buff)
+    -- scales with the points spent, and sharing Eviscerate's higher threshold
+    -- meant Rupture never got cast at all - buff refreshes reset the combo
+    -- points long before that threshold was reached.
+    if c.ruptureCP == nil then c.ruptureCP = 3 end
+    -- Optionally reserve Eviscerate for the execute phase only, so every other
+    -- combo point goes into the maintained buffs instead.
+    if c.evisExecuteOnly == nil then c.evisExecuteOnly = false end
     if c.cpFinish == nil then c.cpFinish = 4 end
     if c.popCDs == nil then c.popCDs = false end
     if c.autoCDElite == nil then c.autoCDElite = false end
@@ -117,17 +137,51 @@ function M:ProfileValidity(cfg)
     return (table.getn(missing) == 0), missing
 end
 
--- True if a self buff is up. Tries the SuperWoW name first, then a texture
--- fragment as a fallback, so detection is robust across ranks.
-function M:SelfBuffUp(name, texFrag)
-    if name and self:HasBuff(name) then return true end
-    if texFrag then
-        for i = 1, 32 do
-            local b = UnitBuff("player", i)
-            if b and string.find(b, texFrag) then return true end
+-- Seconds left on Taste for Blood - the melee damage buff Rupture exists for.
+-- Read straight from the buff, which carries a real timer: verified in game
+-- that it resolves by name through the same GetPlayerBuffID -> SpellInfo path
+-- the core's snapshot uses ("Taste for Blood 11.506"), and BuffTime returns 0
+-- when it is absent. NOTE this tracks the PLAYER buff, not the target's bleed:
+-- the talent grants the buff "regardless of successful application" and it
+-- survives a target switch, so the target debuff is the wrong signal.
+-- Deliberately NO estimated-duration fallback: an earlier version stamped an
+-- expected duration on cast and preferred it whenever the buff read as absent,
+-- which inverted the whole point - once the real buff had run out, the stale
+-- stamp still claimed it was up, so Rupture never won at the threshold.
+function M:TasteLeft()
+    return self:BuffTime(TALENT_TASTE) or 0
+end
+
+-- Talent rank by name, cached; cleared when talents are respent (see the event
+-- frame at the bottom of this file).
+function M:TalentRank(name)
+    if not self.talentCache then self.talentCache = {} end
+    if self.talentCache[name] ~= nil then return self.talentCache[name] end
+    local rank = 0
+    local tabs = GetNumTalentTabs and GetNumTalentTabs() or 0
+    for tab = 1, tabs do
+        for i = 1, GetNumTalents(tab) do
+            local n, _, _, _, r = GetTalentInfo(tab, i)
+            if n == name then rank = r or 0; break end
         end
+        if rank > 0 then break end
     end
-    return false
+    self.talentCache[name] = rank
+    return rank
+end
+
+-- Does Rupture need (re)casting? Two different questions depending on the
+-- talent, which is why the rank is read rather than assumed:
+--   * WITH Taste for Blood, Rupture is maintained for the PLAYER buff, so the
+--     buff's own remaining time decides.
+--   * WITHOUT it there is no buff at all - Rupture is then just a bleed, so it
+--     falls back to whether the DoT is on the TARGET. (Using the buff check
+--     here would read "always missing" and re-cast Rupture every single time.)
+function M:RuptureDue()
+    if self:TalentRank(TALENT_TASTE) > 0 then
+        return self:TasteLeft() < TFB_RENEW
+    end
+    return not self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture")
 end
 
 -- ============================================================
@@ -166,9 +220,11 @@ function M:Rotate(cfg)
     if self.trace then
         self:Trace("cp=" .. cp
             .. " build=" .. builder
-            .. " snd=" .. (useSnd and (self:SelfBuffUp("Slice and Dice", "SliceDice") and "up" or "down") or "-")
-            .. " env=" .. (useEnv and (self:SelfBuffUp("Envenom", "Sword_31") and "up" or "down") or "-")
-            .. " rup=" .. (useRup and (self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture") and "up" or "down") or "-")
+            .. " snd=" .. (useSnd and string.format("%.1fs", self:BuffTime("Slice and Dice")) or "-")
+            .. " env=" .. (useEnv and string.format("%.1fs", self:BuffTime("Envenom")) or "-")
+            .. " tfb=" .. (useRup and ((self:TalentRank(TALENT_TASTE) > 0)
+                and string.format("%.0fs", self:TasteLeft())
+                or (self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture") and "dot" or "no-dot")) or "-")
             .. " rip=" .. ((cfg.useRiposte and now < (self.riposteExpiry or 0)) and "Y" or "N")
             .. " sa=" .. ((cfg.useSurpriseAttack and now < (self.surpriseExpiry or 0)) and "Y" or "N")
             .. " exec=" .. (cfg.useExecute and (execute and "Y" or "N") or "-")
@@ -208,51 +264,61 @@ function M:Rotate(cfg)
         return
     end
 
-    -- P3 Slice and Dice gone or expiring soon, refresh as cheaply as possible
-    if useSnd then
-        local sndLeft = 0
-        if self:SelfBuffUp("Slice and Dice", "SliceDice") then
-            sndLeft = (self.sndExpire or 0) - now
-            if sndLeft <= 0 then sndLeft = BUFF_RENEW + 1 end   -- active, timer unknown
-        end
-        if sndLeft < BUFF_RENEW then
-            if cp == 1 then
-                if self:Cast("Slice and Dice") then self.sndExpire = now + (SND_DUR[cp] or SND_DUR[1]) end
-            else
-                self:Cast("Eviscerate")
-            end
-            return
-        end
+    -- How much life is left on each maintained buff - all three read straight
+    -- off the real buff timer now (see the header comment above).
+    local sndLeft = useSnd and self:BuffTime("Slice and Dice") or 0
+    local envLeft = useEnv and self:BuffTime("Envenom") or 0
+    local sndDue = useSnd and sndLeft < BUFF_RENEW
+    local envDue = useEnv and envLeft < BUFF_RENEW
+    local rupDue = useRup and self:RuptureDue()
+    local rupCP = cfg.ruptureCP or 3
+
+    -- ------------------------------------------------------------
+    -- Execute first: on a dying target a fresh buff or bleed is wasted, so the
+    -- points go straight into damage.
+    -- ------------------------------------------------------------
+    if execute then
+        self:Cast("Eviscerate")
+        return
     end
 
-    -- P4 Envenom gone or expiring soon, same logic
-    if useEnv then
-        local envLeft = 0
-        if self:SelfBuffUp("Envenom", "Sword_31") then
-            envLeft = (self.envExpire or 0) - now
-            if envLeft <= 0 then envLeft = BUFF_RENEW + 1 end
-        end
-        if envLeft < BUFF_RENEW then
-            if cp == 1 then
-                if self:Cast("Envenom") then self.envExpire = now + (ENV_DUR[cp] or ENV_DUR[1]) end
-            else
-                self:Cast("Eviscerate")
-            end
-            return
-        end
+    -- ------------------------------------------------------------
+    -- P3 Rupture, at its OWN (lower) combo-point threshold. It goes first
+    -- among the buffs because it is the only one whose strength scales with the
+    -- points spent (2% melee damage per point via Taste for Blood), and the
+    -- moment another buff comes due is exactly our combo-point peak - so that
+    -- peak is worth spending here. Ruthlessness hands a point straight back,
+    -- which lands the cheap refreshes below on the very next press.
+    -- ------------------------------------------------------------
+    if rupDue and cp >= rupCP then
+        self:Cast("Rupture")   -- uptime is read back off the buff itself, nothing to stamp
+        return
     end
 
-    -- P5 Rupture upkeep: a finisher that applies the bleed and, with the
-    -- Assassination talent Taste for Blood, a stacking damage buff. Refreshed at
-    -- the finisher threshold when it is missing on the target, before dumping
-    -- the rest into Eviscerate. Rupture is baseline (no talent required); the
-    -- talent just sweetens an already-worthwhile DoT, so the toggle is enough.
-    if useRup and cp >= cpEvis and not self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture") then
-        if self:Cast("Rupture") then return end
+    -- ------------------------------------------------------------
+    -- P4/P5 Fixed-strength buffs. Their potency does not scale with combo
+    -- points (only their duration does), so they are simply refreshed with
+    -- whatever is on hand the moment they run low - no dumping a finisher
+    -- first just to get back down to 1 point, which only burned energy and a
+    -- global cooldown for nothing.
+    -- ------------------------------------------------------------
+    if sndDue then
+        self:Cast("Slice and Dice")   -- uptime is read back off the buff itself, nothing to stamp
+        return
+    end
+    if envDue then
+        self:Cast("Envenom")   -- uptime is read back off the buff itself, nothing to stamp
+        return
     end
 
-    -- P6 buffs healthy, enough combo points (or target about to die), Eviscerate
-    if cp >= cpEvis or execute then
+    -- ------------------------------------------------------------
+    -- P6 Eviscerate as the surplus finisher: only once every maintained buff is
+    -- healthy. Suppressed while Rupture is waiting for its threshold, so it can
+    -- never steal the points Rupture is saving up for. Can be reserved for the
+    -- execute phase entirely (evisExecuteOnly), which puts every other point
+    -- into the buffs instead.
+    -- ------------------------------------------------------------
+    if not cfg.evisExecuteOnly and not rupDue and cp >= cpEvis then
         self:Cast("Eviscerate")
         return
     end
@@ -287,11 +353,14 @@ end
 -- ============================================================
 local riposteFrame = CreateFrame("Frame")
 riposteFrame:RegisterEvent("CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES")
+riposteFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")   -- talents respent
 riposteFrame:SetScript("OnEvent", function()
     if event == "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES" then
         if arg1 and string.find(string.lower(arg1), "parry") then
             M.riposteExpiry = GetTime() + 5.5
         end
+    elseif event == "CHARACTER_POINTS_CHANGED" then
+        M.talentCache = nil   -- Taste for Blood may have been (un)learned
     end
 end)
 
