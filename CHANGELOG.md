@@ -4,6 +4,126 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v0.15.5 — Warrior UI: Sunder stacks slider folded into the Sunder Armor toggle
+
+**UI polish.** The Warrior *Sunder stacks* slider is now part of the *Sunder Armor* toggle
+row (a combined toggle+slider, matching the Hunter Mend Pet / Shaman Mana Tide rows) instead
+of sitting as a separate slider at the bottom of the Threat/AoE section. The slider follows
+the toggle (greyed when off) and hides when Sunder Armor isn't learned. No behavior change.
+
+---
+
+## v0.15.4 — BuffUp integration (buff monitor + rogue poison Quick Bar), Rogue execute, Paladin double-heal fix
+
+**Feature + fixes.** Folds the standalone **BuffUp** addon into Aegis as an optional upkeep monitor, adds a rogue execute finisher, and fixes a Paladin double-heal. If you ran standalone BuffUp, you can now retire it — Aegis covers the same ground.
+
+### ✨ BuffUp integration (new `Aegis_SBR_BuffUp.lua`)
+Two **independent** features, each toggled in the minimap right-click panel (new "Upkeep monitors" section), so one can run without the other:
+- **Buff monitor** (all classes): watch chosen self-buffs; when one is missing, a clickable rebuff button appears on screen to recast it. Its own config window (class-coloured frame) opens from the minimap panel's **Configure** button — scan your current buffs and click to watch, click a watched entry to remove. Buff detection is name-based (rank/locale proof) with an icon-texture fallback; a `SPELLS_CHANGED` rescan keeps a newly-learned rank matched.
+- **Poison control** (rogue): a movable **Quick Bar** of up to 4 poison presets — left-click a preset for mainhand, right-click for offhand — plus optional rebuff buttons when a poison falls off. Presets are configured in the **Rogue class panel** (Poisons section): enter just the poison *type* (e.g. "Instant Poison", **no rank**) and whatever rank is in your bags is found and applied automatically. Each Quick Bar button shows charge and remaining-time bars (mainhand left, offhand right), captured on first apply. Applying a poison needs a real click, so it is always button-driven, never cast from the rotation macro. The bar auto-sizes to the number of configured presets, and preset labels abbreviate elegantly (drop the redundant "Poison", keep the rank).
+- Poison presets / buff watch list are stored per character (`AegisDB.buffup`), shared across profiles.
+- New shared UI primitive `Aegis_SBR_Layout:Button` (a clickable label+value row) backs the preset editors.
+- **Not ported from standalone BuffUp:** OG-Twink interop (dropped). Shaman weapon imbues are already covered by the class panel's Weapon-imbue upkeep (auto-cast, superior to a manual button), so they were intentionally left there.
+
+### ✨ Added
+- **Rogue — Execute low-HP targets** (opt-in, default OFF; Finishers section). Below a configurable health threshold (default 10%), Eviscerate fires with whatever combo points are on hand instead of waiting for the normal threshold, so points aren't wasted on a kill. Ruthlessness guarantees at least one combo point after any finisher, so this is rarely blocked. Adds an `exec=` field to `/sbr trace`.
+
+### 🔧 Changed
+- **Rogue — pre-pull poison reminder retired.** The chat warning is superseded by the poison Quick Bar / rebuff buttons, which surface a missing poison on screen. (Poisons *can* be applied in combat via those buttons; the old reminder's "pre-pull only" assumption is gone.)
+
+### 🐛 Fixed
+- **Paladin — double heal on a topped-off target.** Two causes: (1) `StillCasting` now reads the client's real cast bar (`CastingBarFrame`) instead of a cast-time estimate, so a spammed press during a Holy Light cast (2.5s, longer than the 1.5s GCD) can't start a second heal before the first lands — this also correctly accounts for Nampower's queue starting the cast slightly later than the call. (2) The in-flight-heal prediction no longer discards itself when an actively-tanked target dips below its commit-time health during the post-cast latency window; the prediction is additive and capped, so it self-corrects for real new damage without re-healing a target the first heal already covered.
+
+---
+
+## v0.15.3 — Warrior shout upkeep: Battle Shout + Demoralizing Shout (audit W1 + W4)
+
+**Feature (rotation, user-approved).** Implements the two shout gaps the Phase 1 audit
+flagged — Battle Shout was missing from the Warrior module entirely despite being the first
+line of the Arms/Fury rotation. Each is its own toggle.
+
+- **Battle Shout** (*Shouts* section, **default ON**): keeps the party attack-power buff up.
+  Refreshed only when it's **missing or under ~30s left**, and placed **below your strikes**
+  so it never delays one — it costs a global cooldown only about once every two minutes.
+  Any stance, rage-gated, and skipped during the Execute phase so rage feeds Execute. The
+  time-left read is guarded so an unreadable duration can't spam it. Because Battle Shout
+  now defaults on, existing warrior profiles will start maintaining it after you update
+  (toggle it off in the panel if you don't want it).
+- **Demoralizing Shout** (*Shouts* section, **default OFF**): keeps the enemy attack-power
+  reduction on your target for mitigation (tanking). Debuff-maintained exactly like Rend —
+  re-applied only when it falls off the target. Any stance, rage-gated, skipped in Execute.
+  Opt-in, since it spends a debuff slot (mind the raid debuff cap).
+- Also adds `/sbr spell` aliases: `battleshout`/`bshout`, `demoshout`/`demo`.
+
+---
+
+## v0.15.2 — Minimap button click fix, take 2 (strata, for pfUI)
+
+**Fix.** Follow-up to the 0.15.1 minimap fix, which wasn't enough. pfUI layers its minimap
+border / click-catcher on a **higher frame strata** than the minimap, and the 0.15.1 change
+only raised the button's frame *level* — which orders frames within the same strata, so
+pfUI's overlay still intercepted the clicks. The button is now on a higher strata than that
+overlay, so the whole button is clickable (the adaptive edge-hugging radius from 0.15.1 is
+kept). If it's still finicky under a specific pfUI config, that points to click-vs-drag or
+button collection rather than layering — report back and it can be tuned further.
+
+---
+
+## v0.15.1 — Hunter dual mana-aspect thresholds + minimap button clickable under pfUI
+
+**Tuning + fix.**
+
+- **Hunter: two mana-aspect sliders.** The single "swap to the mana aspect below X%" (with a
+  fixed +15% swap-back) is now **two independent thresholds**: *Viper below* (drop to Aspect
+  of the Viper when mana falls under this) and *Back to combat at* (swap back to Aspect of
+  the Hawk/Wolf once mana recovers to this). Set them wherever you like — e.g. Viper at 20%,
+  back at 70%. Existing profiles keep their old behavior exactly (the back mark defaults to
+  the previous low + 15%); a guard keeps the back mark above the low mark so the aspect never
+  flaps. Which abilities fire is unchanged — only *when* the mana-regen aspect is worn.
+- **Minimap button: clickable under pfUI.** The button was placed at a fixed radius from the
+  minimap centre, so pfUI's smaller/reshaped minimap left it floating over pfUI's border
+  where only a sliver was clickable. The radius is now derived from the minimap's actual
+  size (so it hugs whatever minimap is present) and the button's frame level is raised above
+  the minimap cluster so clicks aren't intercepted. It also stays draggable.
+
+---
+
+## v0.15.0 — Phase 2: weapon-enchant detection + Shaman imbue upkeep + Rogue poison reminder
+
+**Feature (gated, conservative, default OFF).** The first Phase 2 batch: a shared
+weapon-enchant detection helper and two per-class upkeep features built on it. Detection is
+ungated plumbing; the class behaviors were implemented against an explicit sign-off for
+exactly the conservative design in `docs/research-weapon-enchant-upkeep.md` — nothing fires
+unless you turn it on.
+
+- **Shared detection helper (core).** `Aegis_SBR:WeaponEnchant(slot)` returns
+  `has, msRemaining, charges` from `GetWeaponEnchantInfo()` (read live each call, because
+  `msRemaining` is a running countdown); `Aegis_SBR:WeaponEnchantId(slot)` returns the
+  enchant id via `GetWeaponEnchantID`. Both presence-gated, so a client without SuperWoW's
+  enchant API degrades cleanly. Confirmed on Turtle 1.12 (charges reads 0 for a time-based
+  enchant, so upkeep gates on `has`/`ms`, never charges).
+- **Shaman — main-hand weapon-imbue upkeep** (config: *Weapon imbue* section, default OFF).
+  Pick an imbue (Rockbiter / Flametongue / Frostbrand / Windfury). When the main hand is
+  **bare**, it auto-casts the imbue **out of combat** (or on approach); **in combat** it only
+  re-imbues with the *Apply in combat* opt-in (a GCD cost), otherwise it just reminds you.
+  When an imbue is present but under the *Warn under* minute threshold, it **warns rather
+  than overwriting** (the replace popup is untested and re-imbuing costs a GCD). Pre-pull
+  upkeep runs even with no target selected, and never auto-acquires a mob. **Which ability
+  fires in the actual combat rotation, and in what order, is unchanged** — this is a
+  lowest-priority self-buff step above the Lightning Bolt filler. Main-hand only; off-hand
+  imbue is deferred (a fragile weapon-click flow).
+- **Rogue — poison pre-pull reminder** (config: *Poisons* section, default OFF). Because
+  poisons can't be applied in combat, this never auto-applies: on entering combat, if a
+  weapon poison is missing it prints a warning (off-hand only when an off-hand weapon is
+  equipped). No rotation change.
+- Imbue/poison spell names are best-effort and `KnowsSpell`-gated — confirm with `/sbr debug`
+  if an imbue isn't recognized.
+
+Still open in Phase 2: off-hand imbue, Rogue poison auto-apply (needs the replace-popup and
+in-combat-application tests), and Shaman totem-destruction detection.
+
+---
+
 ## v0.14.1 — Phase 1 rotation audit report + Hunter sting-detection fix
 
 **Audit + one pre-authorized fix.** The Phase 1 rotation-correctness audit is complete:

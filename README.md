@@ -1,4 +1,4 @@
-# Aegis: Single Button Rotation ⚔️ (v0.14.1)
+# Aegis: Single Button Rotation ⚔️ (v0.15.5)
 
 **Smart, Modular Combat Automation for Turtle WoW (1.18.1)**
 
@@ -49,6 +49,7 @@ A refined evolution of the *ExAutoRogue* logic focused on efficient combo point 
 - **Finisher Hysteresis Engine:** Dynamically tracks *Slice and Dice* and *Envenom* buffs. It will auto-refresh them efficiently at exactly 1 Combo Point if they are about to expire, otherwise saving points to dump into maximum-damage *Eviscerates*.
 - **Reactionary Counters:** Instantaneous out-of-GCD execution for abilities like *Riposte* during active parry windows.
 - **Cooldown Automation:** Integrates *Adrenaline Rush* and *Blade Flurry* seamlessly, prioritizing them against Elite or Boss targets.
+- **Poison Reminder (opt-in):** Because weapon poisons can't be applied in combat, the *Poisons* toggle gives you a **pre-pull nudge** instead — a chat warning as you enter combat if a weapon poison is missing (off-hand only when you have an off-hand weapon). It never auto-applies. Off by default.
 
 ### ⚔️ Warrior `(Beta)`
 A roleless, toggle-driven engine covering Arms, Fury, and Protection from early leveling through endgame raiding. Rather than locking to a spec, you enable the abilities you have and the priority degrades gracefully as you learn them:
@@ -59,6 +60,7 @@ A roleless, toggle-driven engine covering Arms, Fury, and Protection from early 
 - **Smart Rage Dump:** Queues *Heroic Strike* (or *Cleave* in AoE mode) onto your next swing only above a configurable rage floor, and suppresses it during the *Execute* phase so surplus rage funnels into *Execute*.
 - **Cooldown Automation:** *Death Wish*, *Recklessness*, and *Berserker Rage* fire on cooldown, only on Elite/Boss targets, or fully manually — the same three-state model as the other classes — while *Bloodrage* tops up rage on demand, even before the pull.
 - **Threat Toolkit:** Maintains *Sunder Armor* up to a chosen stack count and weaves *Shield Slam*, *Revenge*, and *Shield Block* upkeep for Protection tanking.
+- **Shout Upkeep:** *Battle Shout* (on by default) is kept up as the party attack-power buff — refreshed only when it's missing or about to expire and placed **below your strikes**, so it costs a global cooldown only about once every two minutes and never delays a strike. *Demoralizing Shout* (off by default) keeps the enemy attack-power reduction on your target for tanking, re-applied only when it drops. Both yield during *Execute* and are rage-gated.
 - **Leveling Toggles (off by default):** *Charge* opens a pull from range in Battle Stance — self-limiting, since the client blocks it once you're in combat, so it only ever fires on the initial gap-close. *Rend* keeps its bleed up in Battle or Defensive Stance and yields during *Execute* so rage funnels there instead. Neither toggle is meant for endgame play.
 - **Reliable Auto-Attack:** If *Attack* isn't placed on an action bar, the addon falls back to starting the swing directly, so melee always engages without a manual `/startattack`.
 
@@ -116,6 +118,7 @@ Enhancement, Elemental, Tank, and now **Restoration** (group healer) in one mode
 * **Works from Level 1:** A fresh shaman only has *Lightning Bolt* and melee, so the Lightning Bolt filler carries the early levels and everything else — shocks, shields, Stormstrike, Lightning Strike, totems — switches itself on through `KnowsSpell` as it's trained.
 * **Talent Automation:** *Stormstrike* and *Lightning Strike* are talent abilities that appear in the spellbook when talented, so they're auto-included when learned (Stormstrike's Nature self-buff is followed by a shock to consume it). *Elemental Focus* grants **no spell** — it's a passive crit proc (Clearcasting, 60% cheaper next spell) — so Aegis reads the **talent tree** to detect it and surface the proc, the same approach used for the Warlock's Nightfall.
 * **Shield & Shock:** Keeps your chosen shield up (*Lightning* for damage/threat, *Water* for mana) and casts one shock on the shared cooldown — *Flame Shock* maintained as a DoT, *Earth/Frost* on cooldown. Switch with `/sbr shield` and `/sbr shock`.
+* **Weapon Imbue Upkeep (opt-in):** The *Weapon imbue* section keeps a **main-hand** imbue up (*Rockbiter / Flametongue / Frostbrand / Windfury*). When the weapon is bare it auto-casts the imbue **out of combat** (or on approach); **in combat** it only re-imbues with the *Apply in combat* opt-in (that's a global cooldown), otherwise it just reminds you. If the imbue is present but running low (the *Warn under* minutes slider) it warns rather than overwriting. Off by default; main-hand only for now. *(Detection uses SuperWoW's `GetWeaponEnchantInfo`; imbue names are `KnowsSpell`-gated — confirm with `/sbr debug` if one isn't recognized.)*
 * **Totems (every spec) & Cooldowns:** A shared **Totems** section maintains a full four-element set — Water, Earth, Fire, Air pickers, each with sensible per-spec defaults (Enhancement: Windfury / Searing / Strength / Mana Spring; Elemental: Grace of Air / Searing / Mana Spring; Tank: Stoneskin / Grounding / Mana Spring) — during a lull in **every** mode, not just Restoration. Re-drop timing is confirmed from your actual casts via SuperWoW's `UNIT_CASTEVENT` rather than a blind clock, so a manual re-drop or a Mana Tide bump resets the right element's timer. *Elemental Mastery* and self-*Bloodlust* round out the cooldowns.
 
 > **Verification note:** Buff/proc names are best-effort — confirm the **Clearcasting** proc, the **Stormstrike** self-buff, and the **Searing Totem** / **Earthshaker Slam** spell names in-game with `/sbr talents` and `/sbr debug` if anything isn't firing; the talent name sits in one constant in `Class_Shaman.lua`. For **Restoration**, the same applies to the **Nature's Swiftness-equivalent** (tries `Nature's Swiftness`, then `Ancestral Swiftness`), **Mana Tide Totem**, and the **totem names** in the picker tables — and the heal rank values are vanilla baselines, with the totem re-drop intervals (55s water / 110s others) likely wanting a tune to Turtle's durations.
@@ -299,6 +302,7 @@ When using the /sbr spell command, you can use short aliases:
   * `dw` / `deathwish` → `Death Wish`, `reck` / `recklessness` → `Recklessness`, `br` / `berserkerrage` → `Berserker Rage`
   * `bld` / `bloodrage` → `Bloodrage`, `sb` / `shieldblock` → `Shield Block`
   * `charge` → `Charge` (leveling opener), `rend` → `Rend` (leveling bleed)
+  * `battleshout` / `bshout` → `Battle Shout`, `demoshout` / `demo` → `Demoralizing Shout`
 
 ## Hunter Combat Toggles:
 

@@ -20,6 +20,7 @@ local SPELL_OF = {
     useSweeping = "Sweeping Strikes", useDeathWish = "Death Wish",
     useRecklessness = "Recklessness", useBerserkerRage = "Berserker Rage",
     useBloodrage = "Bloodrage", useShieldBlock = "Shield Block",
+    useBattleShout = "Battle Shout", useDemoShout = "Demoralizing Shout",
     stanceDance = nil, aoeMode = nil, popCDs = nil, autoCDElite = nil,
 }
 
@@ -59,11 +60,19 @@ function M:BuildBody(ui, parent)
     L:Header("Threat / AoE")
     row("aoeMode", "AoE mode")
     row("useSweeping", "Sweeping Strikes")
-    row("useSunder", "Sunder Armor")
+    -- Sunder Armor toggle carries its stack-count slider on the same row (like the
+    -- other classes' toggle+slider rows), instead of a separate slider at the foot
+    -- of the section. Registered into self.cb so the RefreshBody bind loop and
+    -- the "(not learned)" handling treat it like any other toggle.
+    self.sunderRow = L:Row{ key = "useSunder", label = "Sunder Armor", spell = "Sunder Armor", onToggle = set("useSunder"),
+        slider = { key = "sunderStacks", min = 1, max = 5, step = 1, suffix = "", onChange = set("sunderStacks") } }
+    self.cb.useSunder = self.sunderRow
     row("useThunderClap", "Thunder Clap")
     row("useCleave", "Cleave (AoE)")
-    self.sunderRow = L:Row{ label = "Sunder stacks",
-        slider = { key = "sunderStacks", min = 1, max = 5, step = 1, suffix = "", onChange = set("sunderStacks") } }
+
+    L:Header("Shouts")
+    row("useBattleShout", "Battle Shout")
+    row("useDemoShout", "Demoralizing Shout")
 
     L:Header("Rage dump")
     row("useHeroicStrike", "Heroic Strike")
@@ -98,10 +107,12 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.stanceDD,              "Home stance",   "The stance the rotation returns to when dancing. Berserker for most DPS, Defensive for tanking.")
     ui:Tip(self.cb.aoeMode.cb,         "AoE mode",      "Switches the rage dump to Cleave and uses Whirlwind on cooldown. Flip mid-fight with /sbr aoe.")
     ui:Tip(self.cb.useSweeping.cb,     "Sweeping Strikes", "Fired on cooldown while AoE mode is on (off the global cooldown).")
-    ui:Tip(self.cb.useSunder.cb,       "Sunder Armor",  "Applied as a filler up to the stack count below, then left to ride.")
+    ui:Tip(self.cb.useSunder.cb,       "Sunder Armor",  "Applied as a filler up to the stack count beside it, then left to ride.")
     ui:Tip(self.cb.useThunderClap.cb,  "Thunder Clap",  "AoE filler. Battle stance in 1.12, so a Defensive tank will not auto-cast it.")
     ui:Tip(self.cb.useCleave.cb,       "Cleave in AoE", "When AoE mode is on, dump rage with Cleave instead of Heroic Strike.")
     ui:Tip(self.sunderRow.slider,          "Sunder stacks", "Apply Sunder Armor until the target carries this many stacks.")
+    ui:Tip(self.cb.useBattleShout.cb,  "Battle Shout",  "Keeps the party attack-power buff up. Refreshed only when it is missing or about to expire, and below your strikes so it never delays one.", "Skipped during Execute so rage feeds Execute. On by default.")
+    ui:Tip(self.cb.useDemoShout.cb,    "Demoralizing Shout", "Keeps the enemy attack-power reduction on your target, for mitigation (tanking). Re-applied only when it falls off the target. Off by default.", "Uses a debuff slot - mind the raid debuff cap.")
     ui:Tip(self.cb.useHeroicStrike.cb, "Rage dump",     "Queue Heroic Strike (or Cleave in AoE) on the next swing when rage is above the value below.")
     ui:Tip(self.dumpRow.slider,            "Dump above rage", "Only queue the rage dump when rage is at least this high, so you never starve your strikes.")
     ui:Tip(self.wwRow.slider,              "Whirlwind above rage", "Single-target only: also fire Whirlwind when rage is at least this high, to bleed off excess.")
@@ -137,6 +148,8 @@ function M:RefreshBody(ui, buf)
     local ss = buf.sunderStacks or 5
     self.sunderRow.slider:SetValue(ss)
     if self.sunderRow.slider.valText then self.sunderRow.slider.valText:SetText(tostring(ss)) end
+    -- the stacks slider follows the Sunder Armor toggle (greyed when off)
+    ui:SliderEnable(self.sunderRow.slider, buf.useSunder and true or false)
 
     local dr = buf.dumpRage or 60
     self.dumpRow.slider:SetValue(dr)

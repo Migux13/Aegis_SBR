@@ -13,7 +13,7 @@ Aegis_SBR_Minimap = {}
 local AM = Aegis_SBR_Minimap
 
 local DEFAULT_ANGLE = 200   -- degrees around the minimap, lower-left by default
-local RADIUS = 80           -- distance from the minimap centre to the button
+local RADIUS = 80           -- fallback distance from centre if the minimap size is unreadable
 
 -- The built-in class crest sheet (4x4 grid, 0.25 steps). We pick the cell
 -- matching the player's class so the button wears their class icon, and fall
@@ -35,10 +35,22 @@ local CLASS_TCOORDS = {
 -- ------------------------------------------------------------
 -- placement, dragging, and the class icon
 -- ------------------------------------------------------------
+-- Distance from the minimap centre, derived from the minimap's ACTUAL size so
+-- the button hugs the edge of whatever minimap is present. A fixed radius floats
+-- the button out past the edge when another addon resizes the minimap - pfUI in
+-- particular shrinks it, and the button then lands over pfUI's border frame
+-- where only a sliver stays clickable. Falls back to RADIUS if the size reads 0.
+local function minimapRadius()
+    local w = (Minimap and Minimap.GetWidth and Minimap:GetWidth()) or 0
+    if w > 4 then return w / 2 + 5 end
+    return RADIUS
+end
+
 local function placeButton()
     local angle = math.rad((AegisDB and AegisDB.minimapAngle) or DEFAULT_ANGLE)
+    local r = minimapRadius()
     AM.button:ClearAllPoints()
-    AM.button:SetPoint("CENTER", Minimap, "CENTER", RADIUS * math.cos(angle), RADIUS * math.sin(angle))
+    AM.button:SetPoint("CENTER", Minimap, "CENTER", r * math.cos(angle), r * math.sin(angle))
 end
 
 local function dragUpdate()
@@ -166,7 +178,7 @@ end
 -- ============================================================
 local function buildPanel()
     local p = CreateFrame("Frame", "Aegis_SBR_MinimapPanel", UIParent)
-    p:SetWidth(232); p:SetHeight(214)
+    p:SetWidth(232); p:SetHeight(276)
     p:SetFrameStrata("DIALOG")
     p:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -269,6 +281,40 @@ local function buildPanel()
     hint:SetJustifyH("LEFT")
     hint:SetText("Assist mirrors that player's target by GUID, not by name - a same-named mob from another group is never mistaken for theirs.")
 
+    -- Upkeep monitors: two INDEPENDENT toggles (Aegis_SBR_BuffUp). Buff monitor
+    -- watches self-buffs and shows rebuff buttons; poison control drives the
+    -- rogue poison Quick Bar. Each writes only its own flag, so one can run
+    -- without the other.
+    local monLabel = p:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    monLabel:SetPoint("TOPLEFT", 12, -156)
+    monLabel:SetText("Upkeep monitors")
+
+    local function makeCheck(yOff, text, onClick)
+        local c = CreateFrame("CheckButton", nil, p, "UICheckButtonTemplate")
+        c:SetWidth(16); c:SetHeight(16)
+        c:SetPoint("TOPLEFT", 14, yOff)
+        local lbl = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("LEFT", c, "RIGHT", 4, 0)
+        lbl:SetText(text)
+        c:SetScript("OnClick", function() onClick(this:GetChecked() and true or false) end)
+        return c
+    end
+
+    p.buffMonCheck = makeCheck(-176, "Buff monitor", function(on)
+        if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp:SetBuffMonitor(on) end
+    end)
+    -- Opens the buff monitor's own config window (watch list + buff scan).
+    local buffCfgBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    buffCfgBtn:SetWidth(74); buffCfgBtn:SetHeight(18)
+    buffCfgBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -12, -175)
+    buffCfgBtn:SetText("Configure")
+    buffCfgBtn:SetScript("OnClick", function()
+        if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp:ToggleConfigWindow() end
+    end)
+    p.poisonCheck = makeCheck(-196, "Poison control (rogue)", function(on)
+        if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp:SetPoisonControl(on) end
+    end)
+
     local cfg = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
     cfg:SetWidth(208); cfg:SetHeight(22)
     cfg:SetPoint("BOTTOM", 0, 12)
@@ -290,6 +336,10 @@ function AM:RefreshPanel()
     p.manualRadio:SetChecked(mode == "manual")
     p.assistRadio:SetChecked(mode == "assist")
     p.assistEdit:SetText((AegisDB and AegisDB.assistTarget) or "")
+    if p.buffMonCheck and Aegis_SBR_BuffUp then
+        p.buffMonCheck:SetChecked(Aegis_SBR_BuffUp:BuffMonitorEnabled())
+        p.poisonCheck:SetChecked(Aegis_SBR_BuffUp:PoisonControlEnabled())
+    end
 end
 
 function AM:TogglePanel()
@@ -307,8 +357,13 @@ end
 local function buildButton()
     local b = CreateFrame("Button", "Aegis_SBR_MinimapButton", Minimap)
     b:SetWidth(31); b:SetHeight(31)
-    b:SetFrameStrata("MEDIUM")
-    b:SetFrameLevel(8)
+    -- pfUI layers its minimap border/click-catcher on a HIGHER STRATA than the
+    -- minimap, so a raised frame LEVEL (which only orders frames within the same
+    -- strata) wasn't enough - the overlay still ate the clicks. Put the button on
+    -- a strata above that overlay so the whole button is clickable, with a high
+    -- level so it also sits above any same-strata siblings.
+    b:SetFrameStrata("HIGH")
+    b:SetFrameLevel((Minimap:GetFrameLevel() or 4) + 10)
     b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     b:RegisterForDrag("LeftButton")
     b:SetMovable(true)
