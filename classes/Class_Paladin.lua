@@ -609,14 +609,25 @@ end
 -- ============================================================
 
 -- Record an in-flight heal so the next press does not pile onto the same unit.
--- Also stamps our own expected cast completion (see StillCasting) - Holy
--- Light's 2.5s cast is longer than the 1.5s global cooldown, so GcdReady()
--- alone reports "ready" up to a full second before the cast actually finishes.
+-- Also stamps their real HP at commit time (see PendingFor) and our own
+-- expected cast completion (see StillCasting) - Holy Light's 2.5s cast is
+-- longer than the 1.5s global cooldown, so GcdReady() alone reports "ready"
+-- up to a full second before the cast actually finishes.
 function M:CommitHeal(unit, amount, castTime)
     self.healTarget = UnitName(unit)
     self.healAmount = amount or 0
     self.healUntil = GetTime() + (castTime or 0) + 1.0
+    self.healBaseline = UnitHealth(unit)
     self.castingUntil = GetTime() + (castTime or 0)
+end
+
+-- True while our own heal cast is still expected to be resolving, even after
+-- the shared GCD (1.5s) has already cleared - closes the gap for any heal
+-- whose cast time exceeds the GCD (Holy Light at 2.5s), where a spammed
+-- press could otherwise start a second heal before the first has landed,
+-- since the target's HP (and PendingFor's prediction) hasn't updated yet.
+function M:StillCasting()
+    return self.castingUntil and GetTime() < self.castingUntil
 end
 
 -- True while our own heal cast is still expected to be resolving, even after
