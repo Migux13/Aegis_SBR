@@ -168,7 +168,7 @@ Frost, Fire, and Arcane in one mode-adaptive module, working from level 1 to rai
 > **Upgrading from AutoRota (pre-0.14.0)?** The addon folder is now `Aegis_SBR` — remove the old `Interface\AddOns\AutoRota\` folder so both never load at once. Your per-character profiles migrate automatically on first login (`AutoRotaDB` → `AegisDB`, with the old data kept as a rollback backup for a few versions). **Back up your `WTF\` folder before the first login on 0.14.0.** If your profiles don't appear: log fully out and copy your character's old saved-variables file — `WTF\Account\<ACCOUNT>\<Realm>\<Character>\SavedVariables\AutoRota.lua` → `Aegis_SBR.lua` in the same folder (clients that keep per-character variables in one combined `SavedVariables.lua` won't need this) — then log back in. `/sbr` is the new primary command (also `/aegis`); `/ar` keeps working as a legacy alias for now.
 
 ### ⚠️ Required
-* :crystal_ball: **`SuperWoW (v1.5.1)`**
+* :crystal_ball: **`SuperWoW`**
   Unlocks advanced client capabilities and expanded Lua functionality for modern addons.
   ↳ [SuperWoW Release](https://github.com/balakethelock/SuperWoW/releases/tag/Release) | [Features Wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) | [SuperAPI Addon](https://github.com/balakethelock/SuperAPI)
 
