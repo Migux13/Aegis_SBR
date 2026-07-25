@@ -69,7 +69,7 @@ function M:BuildBody(ui, parent)
 
     ui:Tip(self.tauntRow.cb, "Smart Pet Taunt", "When the mob peels off your pet onto you, sends the pet's Growl to grab it back (throttled). Off by default; leave it off for melee-weave builds where you want aggro.")
     ui:Tip(self.markRow.cb, "Hunter's Mark", "Applied once per target and refreshed when it falls off.")
-    ui:Tip(self.stingDD, "Sting", "The one sting kept up. Serpent is the staple DoT; Scorpid lowers melee hit; Viper drains mana.")
+    ui:Tip(self.stingDD, "Sting", "The one sting kept up. Serpent is the staple DoT; Scorpid lowers melee hit; Viper drains mana. \"Viper > Serpent\" uses Viper Sting against mana users and falls back to Serpent Sting for everything else.")
     ui:Tip(self.steadyRow.cb, "Steady Shot", "Baseline at level 20. The 1:1 weave after each Auto Shot and the main filler. Queued so it does not clip the shot.")
     ui:Tip(self.arcaneRow.cb, "Arcane Shot", "Instant, weaved on cooldown between Auto Shots.")
     ui:Tip(self.multiRow.cb, "Multi-Shot", "On cooldown. Also leads AoE with Volley.")
@@ -100,13 +100,18 @@ end
 -- refresh body (hunter binding)
 -- ============================================================
 function M:RefreshBody(ui, buf)
-    -- sting dropdown: None plus the stings the hunter actually knows
+    -- sting dropdown: None plus the stings the hunter actually knows, plus the
+    -- smart "Viper > Serpent" option when both stings are known
     local o = { { label = "None", value = "" } }
     local avail = self:AvailableStingsOf()
     for i = 1, table.getn(avail) do o[i + 1] = { label = avail[i], value = avail[i] } end
+    if self:KnowsSpell("Viper Sting") and self:KnowsSpell("Serpent Sting") then
+        table.insert(o, { label = "Viper > Serpent", value = "Viper > Serpent" })
+    end
     local cur = buf.sting or ""
     local shown, c
     if cur == "" then shown, c = "None", ui.COL.white
+    elseif cur == "Viper > Serpent" then shown, c = "Viper > Serpent", ui.COL.white
     elseif self:KnowsSpell(cur) then shown, c = cur, ui.COL.white
     else shown, c = cur .. " (not learned)", ui.COL.red end
     ui:SetDropdown(self.stingDD, o, cur, shown, c)
