@@ -96,6 +96,7 @@ M.stingAlias = {
     serpent = "Serpent Sting", ss = "Serpent Sting",
     scorpid = "Scorpid Sting", sco = "Scorpid Sting",
     viper = "Viper Sting", vs = "Viper Sting",
+    smart = "Viper > Serpent", ["vs>ss"] = "Viper > Serpent",
     none = "",
 }
 
@@ -539,6 +540,20 @@ function M:EnsureAspect(cfg, melee)
     return false
 end
 
+-- Resolve the "Viper > Serpent" smart sting: Viper Sting against mana users,
+-- Serpent Sting for everything else. Returns the config sting unchanged for all
+-- other values (including "" for None, and the three direct sting names).
+function M:ResolveSting(cfg)
+    if cfg.sting == "Viper > Serpent" then
+        if self:KnowsSpell("Viper Sting") then
+            local mmax = UnitManaMax("target")
+            if mmax and mmax > 0 then return "Viper Sting" end
+        end
+        return "Serpent Sting"
+    end
+    return cfg.sting
+end
+
 -- ============================================================
 -- Rotation
 -- ============================================================
@@ -565,13 +580,17 @@ function M:Rotate(cfg)
 
     self:UpdateAspectState(cfg)
 
+    -- Resolve smart sting (Viper > Serpent) to the effective sting for this target
+    local effectiveSting = self:ResolveSting(cfg)
+
     if self.trace then
         self:Trace("mode=" .. (cfg.mode or "ranged") .. (cfg.mode == "auto" and ("/" .. (melee and "melee" or "ranged")) or "")
             .. " hp=" .. floor(targetHP)
             .. " sting=" .. (cfg.sting ~= "" and (cfg.sting
-                .. (self:KnowsSpell(cfg.sting) and "" or "(unlearned)")
+                .. (effectiveSting ~= cfg.sting and ("->" .. effectiveSting) or "")
+                .. (self:KnowsSpell(effectiveSting) and "" or "(unlearned)")
                 .. (self:StingImmuneNow() and "(immune)" or "")
-                .. (self:TargetDebuffUp(cfg.sting, STING_TEX[cfg.sting]) and "(up)" or "")) or "-")
+                .. (self:TargetDebuffUp(effectiveSting, STING_TEX[effectiveSting]) and "(up)" or "")) or "-")
             .. " inMelee=" .. (inMeleeNow and "Y" or "n")
             .. " mark=" .. (cfg.useHuntersMark and (self:TargetDebuffUp("Hunter's Mark", STING_TEX["Hunter's Mark"]) and "Y" or "n") or "-")
             .. " L&L=" .. (self:HasBuff("Lock and Load") and "Y" or "n")
@@ -645,18 +664,18 @@ function M:Rotate(cfg)
     -- 5. GCD priority (strict, one cast per press via early return)
     -- ----------------------------------------------------------------
 
-    -- 5a. Serpent Sting - highest GCD priority so the DoT is kept up. Only AFTER
+    -- 5a. Sting upkeep - highest GCD priority so the DoT is kept up. Only AFTER
     --     Hunter's Mark is confirmed and only at range: it is a ranged shot, so
     --     even a melee hunter lands it on the pull and stops once closed. No HP
     --     gate - the reapply throttle already stops trash from getting a wasted
     --     refresh, and the Arcane finisher below still burns down a low mob.
     if cfg.sting ~= "" and not inMeleeNow and markOK
-        and not self:StingBlocked(cfg.sting) then
-        if self:MaintainSting(cfg.sting, STING_DUR[cfg.sting] or 12) then
+        and not self:StingBlocked(effectiveSting) then
+        if self:MaintainSting(effectiveSting, STING_DUR[effectiveSting] or 12) then
             -- remember this application so a sting that never lands (an immune
             -- undead / boss) is learned and not re-cast every cycle.
             local _, guid = UnitExists("target")
-            self.stingTry = { guid = guid, t = GetTime(), name = cfg.sting }
+            self.stingTry = { guid = guid, t = GetTime(), name = effectiveSting }
             self.stingQueuedT = now   -- protect the queued shot from eviction
             return
         elseif self.stingQueuedT and (now - self.stingQueuedT) < STING_QUEUE_HOLD then
@@ -785,7 +804,7 @@ function M:CmdSting(alias)
     local cfg = Aegis_SBR:GetActiveProfile()
     if not cfg then msgOut("no profile active.", 1, 0.5, 0.3); return end
     local sting = self.stingAlias[string.lower(alias or "")]
-    if sting == nil then msgOut("usage: /sbr sting serpent|scorpid|viper|none", 1, 0.5, 0.3); return end
+    if sting == nil then msgOut("usage: /sbr sting serpent|scorpid|viper|smart|none", 1, 0.5, 0.3); return end
     cfg.sting = sting
     msgOut("sting = " .. ((sting == "") and "(none)" or sting) .. ".")
 end
