@@ -3,8 +3,12 @@
 -- Turtle WoW 1.12 (SuperWoW). DoT priority, configurable, level 1+.
 -- ============================================================
 -- Model (mirrors the proven leveling macro):
---  * Keep the enabled damage-over-time effects up in priority order,
---    Immolate, then the chosen Curse, then Corruption, then Siphon Life.
+--  * Keep the enabled damage-over-time effects up in priority order:
+--    Immolate, the chosen Curse, Siphon Life, the Malediction Curse of
+--    Agony, then Corruption (see the order block in Rotate for why).
+--  * Below an optional target-health threshold no DoT is re-applied at all
+--    (a fresh DoT never pays its mana back on a mob about to die), with an
+--    opt-in exception for Corruption, the cheapest and shortest of them.
 --  * Malediction (optional): if the main curse is not Curse of Agony or
 --    Curse of Doom, that talent piggybacks Curse of Agony on every curse
 --    cast. Enabling coaSecondary tracks and refreshes that DoT on its own.
@@ -63,6 +67,15 @@ local DH_CHANNEL_BASE = 8
 -- enabled DoT with less than that is topped up first (see DotRemaining, which
 -- also backs this boost out of its estimate for a channel that already ran).
 local DH_TICK_BOOST = 0.30
+
+-- Dark Harvest's mana cost, read off the in-game tooltip (Rank 1/1, 230 mana -
+-- it has a single rank, so there is no per-rank table to keep). Used only to
+-- decide whether a ready channel is actually affordable before letting it take
+-- priority over Life Tap (see the Life Tap block in Rotate). Deliberately
+-- compared as a hard floor: understating it would let the rotation queue a
+-- channel that fails in-game while the cooldown never starts, which stalls the
+-- next press on the same dead attempt. Adjust here if Turtle changes the cost.
+local DH_MANA = 230
 
 -- Once an enabled DoT is due to fall off within this many seconds, the wand
 -- filler stops (or does not start) feeding new shots. Reacting only after the
@@ -196,17 +209,26 @@ M.templates = {
         healthFunnel = true, healthFunnelPetHp = 50, healthFunnelHpMin = 45,
         useShadowburn = false, shadowburnHp = 20,
         useDrainSoul = true, drainSoulHp = 20,
+        dotStopHp = 20, dotStopKeepCorruption = true,
     },
     affliction = {
+        -- Dark Harvest is the Affliction capstone and the strongest filler by a
+        -- wide margin (it also accelerates the shadow DoTs already ticking), so
+        -- it leads here. Until it is talented, ResolveFiller drops to the wand -
+        -- deliberately not Shadow Bolt, which is far too mana-hungry to spam as
+        -- a filler; it stays reserved for the free Shadow Trance procs.
         useImmolate = false, curse = "Curse of Agony", useCorruption = true, useSiphonLife = true,
-        filler = "Shadow Bolt", petAttack = true,
+        filler = "Dark Harvest", petAttack = true,
         lifeTap = true, lifeTapMana = 25, lifeTapHpMin = 40,
         drainLifeSustain = true, drainLifeHp = 35,
         healthFunnel = true, healthFunnelPetHp = 50, healthFunnelHpMin = 45,
         useShadowburn = false, shadowburnHp = 20,
         useDrainSoul = false, drainSoulHp = 20,
+        dotStopHp = 20, dotStopKeepCorruption = true,
     },
     destruction = {
+        -- Shadow Bolt stays the filler here: Destruction never reaches Dark
+        -- Harvest, and its whole kit is built around Shadow Bolt spam.
         useImmolate = true, curse = "Curse of the Elements", useCorruption = false, useSiphonLife = false,
         filler = "Shadow Bolt", petAttack = true,
         lifeTap = true, lifeTapMana = 25, lifeTapHpMin = 40,
@@ -214,6 +236,7 @@ M.templates = {
         healthFunnel = true, healthFunnelPetHp = 50, healthFunnelHpMin = 45,
         useShadowburn = true, shadowburnHp = 20,
         useDrainSoul = false, drainSoulHp = 20,
+        dotStopHp = 20, dotStopKeepCorruption = true,
     },
 }
 
@@ -253,6 +276,11 @@ function M:NormalizeProfile(c)
     if c.coaSecondary == nil then c.coaSecondary = false end
     if c.keepShards == nil then c.keepShards = false end
     if c.shardTarget == nil then c.shardTarget = 3 end
+    -- Execute-phase DoT stop. Defaults to 0 (off) rather than the templates'
+    -- 20, so a profile saved before this existed keeps its old behaviour until
+    -- the slider is moved; fresh profiles get the efficiency straight away.
+    if c.dotStopHp == nil then c.dotStopHp = 0 end
+    if c.dotStopKeepCorruption == nil then c.dotStopKeepCorruption = true end
     return c
 end
 
@@ -296,17 +324,17 @@ end
 
 -- Resolve the configured filler to one that can actually fire right now.
 -- The wand filler needs a wand equipped; a spell filler needs to be learned.
--- When neither holds, fall back to Shadow Bolt (the warlock's level 1 nuke and
--- universal filler) so the rotation always has something to cast while
--- leveling. Returns nil only if even Shadow Bolt is somehow unknown.
+-- When the chosen one cannot fire, fall back to the WAND first and only then to
+-- Shadow Bolt: spamming Shadow Bolt as a filler burns far more mana than it is
+-- worth (it is kept for the free Shadow Trance procs instead), while the wand
+-- costs nothing. This matters most for an Affliction profile set to Dark
+-- Harvest before the capstone is talented - that used to silently fall through
+-- to Shadow Bolt spam. Shadow Bolt remains the last resort so a warlock with no
+-- wand equipped still has something to cast; nil only if even that is unknown.
 function M:ResolveFiller(cfg)
     local f = cfg.filler or "Shoot"
-    if f == "Shoot" then
-        if self:HasWand() then return "Shoot" end
-        if self:KnowsSpell("Shadow Bolt") then return "Shadow Bolt" end
-        return nil
-    end
-    if self:KnowsSpell(f) then return f end
+    if f ~= "Shoot" and self:KnowsSpell(f) then return f end
+    if self:HasWand() then return "Shoot" end
     if self:KnowsSpell("Shadow Bolt") then return "Shadow Bolt" end
     return nil
 end
@@ -667,7 +695,23 @@ function M:Rotate(cfg)
         end
     end
 
-    -- Build the ordered DoT list from the enabled, known effects.
+    -- Build the ordered DoT list from the enabled, known effects. The order is
+    -- deliberate, and anything switched off simply lets the rest move up:
+    --  1. Immolate, while it is still in use. Its cast time is the point at low
+    --     levels: those extra ~1.5s let the pet build aggro before your own
+    --     damage lands. It is normally switched off around 30, where its
+    --     damage-per-mana falls behind the shadow DoTs and the cast time turns
+    --     from an asset into a cost.
+    --  2. The chosen curse. Curse of Agony's damage is back-loaded, so it needs
+    --     the head start; Curse of the Elements/Shadow amplify damage taken and
+    --     are applied per tick (not snapshot at cast), so landing them before
+    --     the DoTs means every later tick is already buffed.
+    --  3. Siphon Life. It only pays its mana back if it runs most of its 30s,
+    --     so a late application is a straight loss - it has to go on early.
+    --  4. The Malediction Curse of Agony, back-loaded like the main curse and
+    --     therefore ahead of flat-damage Corruption.
+    --  5. Corruption. Instant and the best damage-per-mana of the set, so it
+    --     loses the least by being applied last.
     local order = {}
     if cfg.useImmolate then table.insert(order, { "Immolate", self.dotTex["Immolate"], 3 }) end
     if cfg.curse ~= "" then
@@ -678,6 +722,7 @@ function M:Rotate(cfg)
         local detectable = tex or Aegis_SBR:CanResolveDebuffNames()
         table.insert(order, { cfg.curse, tex, detectable and 3 or 20 })
     end
+    if cfg.useSiphonLife then table.insert(order, { "Siphon Life", self.dotTex["Siphon Life"], 3 }) end
     -- Malediction secondary curse: with that talent Curse of Agony coexists
     -- with the main curse, but expires sooner and is otherwise unmonitored.
     -- When enabled, keep it up on its own. Skipped if the main curse already
@@ -690,7 +735,18 @@ function M:Rotate(cfg)
         table.insert(order, { "Curse of Agony", coaTex, coaDetectable and 3 or 20 })
     end
     if cfg.useCorruption then table.insert(order, { "Corruption", self.dotTex["Corruption"], 3 }) end
-    if cfg.useSiphonLife then table.insert(order, { "Siphon Life", self.dotTex["Siphon Life"], 3 }) end
+
+    -- Execute phase: stop RE-APPLYING DoTs once the target is nearly dead. A
+    -- fresh DoT never pays its mana back on a mob with seconds to live - Siphon
+    -- Life needs most of its 30s to break even and Curse of Agony's damage is
+    -- back-loaded, so both are pure waste there. Corruption can be exempted
+    -- (dotStopKeepCorruption): it is the shortest and cheapest of them, which
+    -- is exactly why the drain-tank guides keep refreshing that one alone.
+    -- Only re-application stops; DoTs already ticking are never touched, and
+    -- the press falls through to the filler (or Shadowburn / Drain Soul, which
+    -- have already had their own shot above).
+    local dotStopHp = cfg.dotStopHp or 0
+    local dotsSuppressed = dotStopHp > 0 and thp <= dotStopHp
 
     if self.trace then
         local up = ""
@@ -698,12 +754,15 @@ function M:Rotate(cfg)
             local sp, tex = order[i][1], order[i][2]
             up = up .. " " .. sp .. "=" .. (tex and (self:TargetHasTexture(tex) and "Y" or "n") or "?")
         end
-        self:Trace("dots" .. up .. " mana=" .. string.format("%.0f", self:ManaPct()))
+        self:Trace("dots" .. up .. " mana=" .. string.format("%.0f", self:ManaPct())
+            .. " dotstop=" .. (dotStopHp > 0 and (dotsSuppressed and "Y" or "n") or "-"))
     end
 
     for i = 1, table.getn(order) do
         local sp, tex, iv = order[i][1], order[i][2], order[i][3]
-        if self:KnowsSpell(sp) then
+        local exempt = cfg.dotStopKeepCorruption and sp == "Corruption"
+        local allowed = (not dotsSuppressed) or exempt
+        if self:KnowsSpell(sp) and allowed then
             local st = self:ApplyDot(sp, tex, iv)
             if st == "cast" or st == "wait" then return end
             -- "up": continue to the next DoT
@@ -711,7 +770,21 @@ function M:Rotate(cfg)
     end
 
     -- All enabled DoTs up. Optional Life Tap, then the filler.
-    if cfg.lifeTap and self:KnowsSpell("Life Tap") then
+    --
+    -- A Dark Harvest that is ready AND affordable goes first, though. The DoT
+    -- top-up in the branch below exists precisely so the channel gets its full
+    -- boosted duration; spending a GCD on Life Tap here eats into that same
+    -- headroom, so by the time the channel would start a DoT has dropped under
+    -- the threshold again and gets re-applied - a second GCD and the mana Life
+    -- Tap had just bought, both wasted. Tapping one press later costs nothing:
+    -- the channel itself is ~7.5s during which no GCD is spent anyway.
+    -- The affordability check matters - without it a channel we cannot pay for
+    -- would be queued, fail in-game, and (its cooldown never having started)
+    -- be retried on the very next press, stalling the rotation instead of
+    -- fixing the mana. Below the cost, Life Tap keeps its turn.
+    local dhFirst = cfg.filler == "Dark Harvest" and self:KnowsSpell("Dark Harvest")
+        and self:OwnCDReady("Dark Harvest") and (UnitMana("player") or 0) >= DH_MANA
+    if cfg.lifeTap and self:KnowsSpell("Life Tap") and not dhFirst then
         if self:ManaPct() < (cfg.lifeTapMana or 20) and self:PlayerHPPct() > (cfg.lifeTapHpMin or 40) then
             self:Queue("Life Tap")
             return
@@ -746,13 +819,19 @@ function M:Rotate(cfg)
                     end
                 end
             end
-            for i = 1, table.getn(order) do
-                local sp = order[i][1]
-                if self:KnowsSpell(sp) then
-                    local remain = self:DotRemaining(sp)
-                    if remain and remain < minRemain then
-                        self:QueueDot(sp, self:TargetId())
-                        return
+            -- Skipped entirely in the execute phase: topping a DoT up there is
+            -- the same wasted mana the stop above avoids, and the sooner the
+            -- channel starts on a dying target the better - a target that dies
+            -- mid-channel resets Dark Harvest's cooldown outright.
+            if not dotsSuppressed then
+                for i = 1, table.getn(order) do
+                    local sp = order[i][1]
+                    if self:KnowsSpell(sp) then
+                        local remain = self:DotRemaining(sp)
+                        if remain and remain < minRemain then
+                            self:QueueDot(sp, self:TargetId())
+                            return
+                        end
                     end
                 end
             end
