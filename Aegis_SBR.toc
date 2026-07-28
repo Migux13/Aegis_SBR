@@ -7,6 +7,7 @@
 
 Aegis_SBR.lua
 Aegis_SBR_UI.lua
+Aegis_SBR_BuffUp.lua
 Aegis_SBR_Minimap.lua
 classes\Class_Druid.lua
 classes\Class_Druid_UI.lua
