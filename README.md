@@ -1,4 +1,7 @@
 # Aegis: Single Button Rotation ⚔️ (v0.15.5)
+[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Hr66t25vE7)
+[![Client](https://img.shields.io/badge/client-WoW%201.12%20(vanilla)-c79c6e?style=flat-square)](https://turtle-wow.org)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 **Smart, Modular Combat Automation for Turtle WoW (1.18.1)**
 
