@@ -71,6 +71,11 @@ local RAGE = {
     ["Rend"]          = 10,
     ["Battle Shout"]        = 10,
     ["Demoralizing Shout"]  = 10,
+    -- Master Strike (Arms talent): cost UNVERIFIED on Turtle, estimated in line
+    -- with the other talented strikes. Deliberately on the forgiving side, as the
+    -- table intends. If it feels like it skips casts (or attempts and fails),
+    -- this single number is the tuning knob - report the tooltip cost.
+    ["Master Strike"] = 25,
 }
 
 -- Stances an ability may be used from (vanilla 1.12). nil = any stance.
@@ -113,6 +118,7 @@ M.spellAlias = {
     rend = "useRend",
     battleshout = "useBattleShout", bshout = "useBattleShout",
     demoshout = "useDemoShout", demo = "useDemoShout",
+    masterstrike = "useMasterStrike", mstrike = "useMasterStrike",
 }
 
 -- Templates: starting presets, copied into the char's saved profiles once.
@@ -189,6 +195,10 @@ function M:NormalizeProfile(c)
         -- Battle Shout on by default (near-universal AP buff); Demoralizing Shout
         -- off by default (opt-in mitigation debuff, mainly for tanking).
         useBattleShout = true, useDemoShout = false,
+        -- Master Strike (Arms talent) is primarily a PvP pick, so it stays OFF
+        -- until the player opts in; it then fires on cooldown below the spec's
+        -- primary strike.
+        useMasterStrike = false,
     }
     for k, v in pairs(b) do
         if c[k] == nil then c[k] = v end
@@ -422,6 +432,15 @@ function M:Rotate(cfg)
     if cfg.useShieldSlam   and self:Try("Shield Slam")   then return end
     if cfg.useBloodthirst  and self:Try("Bloodthirst")   then return end
     if cfg.useMortalStrike and self:Try("Mortal Strike") then return end
+
+    -- 1d0. Master Strike (Arms talent, opt-in - off by default as it is mainly a
+    --      PvP pick). Placed directly BELOW the spec's primary strike so enabling
+    --      it never displaces Mortal Strike / Bloodthirst / Shield Slam; it fills
+    --      the windows where the primary is on cooldown. It is a talent-granted
+    --      spell, so KnowsSpell sees it only once talented. No stance entry in
+    --      STANCE_REQ (unverified), so it is not stance-gated - report back if it
+    --      turns out to be Battle/Berserker only.
+    if cfg.useMasterStrike and self:Try("Master Strike") then return end
 
     -- 1d1. Battle Shout upkeep (party attack-power buff). Refreshed only when it
     --      is missing or about to expire, and BELOW the strikes so it never
