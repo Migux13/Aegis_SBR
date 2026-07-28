@@ -70,10 +70,17 @@ theirs. Ranged modules opt out of Auto so they never pull something at random.
 *PT Sans Narrow*, one clean row per setting (toggle · label · slider · value), plus a
 draggable minimap button with its own options panel.
 
+**Upkeep monitors (opt-in).** Two independent helpers, toggled from the minimap right-click
+panel. A **buff monitor** watches the self-buffs you choose and pops a clickable rebuff
+button when one drops. A rogue **poison Quick Bar** puts up to four poison presets on a
+movable bar — left-click for main hand, right-click for off hand, with charge and
+time-remaining bars — and applies whatever rank is in your bags. (Poisons need a real click,
+so they're always button-driven, never fired from the rotation macro.)
+
 **Weapon-enchant awareness (opt-in).** Reads your live temporary weapon enchant — presence
-*and* time remaining — powering **Shaman imbue upkeep** and a **Rogue pre-pull poison
-reminder**. Both default off, and both stay conservative: they never overwrite an enchant
-behind your back, and never spend a global cooldown mid-fight unless you say so.
+*and* time remaining — powering **Shaman imbue upkeep**: it auto-applies out of combat,
+reminds you in combat, and never overwrites an existing imbue behind your back or spends a
+global cooldown mid-fight unless you say so.
 
 ---
 
@@ -84,9 +91,9 @@ GUID targeting, and spell-ID debuff resolution all come from it.
 
 | Mod | Why Aegis needs it |
 |---|---|
-| **[SuperWoW](https://github.com/balakethelock/SuperWoW/releases/tag/Release)** (v1.5.1+) | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
-| **[Nampower](https://gitea.com/avitasia/nampower/releases/tag/v4.6.1)** (v4.6.1+) | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. ↳ [settings addon](https://gitea.com/avitasia/nampowersettings) |
-| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3/releases)** (v89+) | Accurate distance and line-of-sight checks. |
+| **[SuperWoW](https://github.com/balakethelock/SuperWoW/releases/tag/Release)** | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
+| **[Nampower](https://gitea.com/avitasia/nampower/releases)** | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. ↳ [settings addon](https://gitea.com/avitasia/nampowersettings) |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3/releases)** | Accurate distance and line-of-sight checks. |
 | **[SuperCleveRoidMacros](https://github.com/jrc13245/SuperCleveRoidMacros)** | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. ↳ [wiki](https://github.com/jrc13245/SuperCleveRoidMacros/wiki) |
 
 ---
@@ -215,7 +222,8 @@ A refined evolution of the *ExAutoRogue* logic focused on efficient combo point 
 - **Finisher Hysteresis Engine:** Dynamically tracks *Slice and Dice* and *Envenom* buffs. It will auto-refresh them efficiently at exactly 1 Combo Point if they are about to expire, otherwise saving points to dump into maximum-damage *Eviscerates*.
 - **Reactionary Counters:** Instantaneous out-of-GCD execution for abilities like *Riposte* during active parry windows.
 - **Cooldown Automation:** Integrates *Adrenaline Rush* and *Blade Flurry* seamlessly, prioritizing them against Elite or Boss targets.
-- **Poison Reminder (opt-in):** Because weapon poisons can't be applied in combat, the *Poisons* toggle gives you a **pre-pull nudge** instead — a chat warning as you enter combat if a weapon poison is missing (off-hand only when you have an off-hand weapon). It never auto-applies. Off by default.
+- **Execute Low-HP Targets (opt-in, off by default):** Below a configurable health threshold (default 10%), *Eviscerate* fires with whatever combo points are on hand rather than waiting for your normal threshold, so points aren't left on a corpse. *Ruthlessness* guarantees at least one point after any finisher, so it's rarely blocked. Adds an `exec=` field to `/sbr trace`.
+- **Poison Quick Bar:** Poison control lives in the **Poisons** section of the panel and the movable Quick Bar (part of the [upkeep monitors](#what-it-does)) — up to four presets, left-click for main hand, right-click for off hand, each button showing charge and time-remaining bars. Enter just the poison *type* (e.g. "Instant Poison", **no rank**) and whatever rank is in your bags is applied.
 </details>
 
 <details>
@@ -227,7 +235,8 @@ Reworked for Turtle WoW 1.18.1's hunter changes, with **Auto**, **Ranged**, and 
 * **Ranged (BM / MM):** Built around the **Auto Shot** backbone with **Steady Shot** (baseline at 20) woven 1:1 after each shot — gated on the exact Auto Shot timing from SuperWoW's `UNIT_CASTEVENT` (interval fallback) so mashing never clips or starves it. *Arcane Shot* / *Multi-Shot* weave as instants. Auto Shot is kept *running* and now **self-unsticks**: if a shot is detected to have stalled it is restarted automatically, instead of needing a manual target swap. Starting Auto Shot is its own press, so it no longer blocks a same-press **Hunter's Mark** or **Sting**.
 * **Lock and Load (MM capstone):** *Aimed Shot* is **not** hard-cast on cooldown (that clips Auto Shot). Instead the rotation watches for the **Lock and Load** buff — a crit from Steady/Aimed/Arcane that resets Aimed Shot, drops its cast time, and makes it cleave a line — and fires *Aimed Shot* the instant it procs. A toggle lets you also cast it on cooldown if you prefer.
 * **Melee (Survival / BM-melee):** Keeps **Aspect of the Wolf** up, starts melee swings, and runs the priority **Mongoose Bite** (reactively in the window after you dodge) → **Lacerate** (maintained bleed) → **Raptor Strike** on cooldown → optional *Wing Clip*. Under `/sbr aoe` it leads with **Carve** (the Survival cone cleave, up to 5 targets). Survival can drop **Immolation Trap** on cooldown (Patch 1.18.1 allows traps in combat). The mana-aspect swap to *Viper* works here too — a mana-heavy melee hunter drops to Viper at your lower threshold and swaps back to Wolf at your upper one.
-* **Range-Correct Upkeep:** **Hunter's Mark** is maintained in *both* modes (a universal damage-amp debuff). A **Sting** (*Serpent*, *Scorpid*, or *Viper*, or none — panel or `/sbr sting`) is a ranged shot, gated on *actual distance*: it lands on the pull while the target is still out of melee — so even a pure **melee** hunter opens with **Hunter's Mark + Serpent Sting** — and then stops once you close in. Both are applied once per target and refreshed exactly when they fall off (SuperWoW spell-id detection). Stings are Poison-school, so they **auto-skip poison-immune mobs** — *Mechanicals* and *Elementals* are skipped by creature type (no wasted cast), and immune *Undead* / bosses are learned after a single cast and then skipped for that fight.
+* **Range-Correct Upkeep:** **Hunter's Mark** is maintained in *both* modes (a universal damage-amp debuff). A **Sting** (*Serpent*, *Scorpid*, *Viper*, the smart **Viper > Serpent** mode, or none — panel or `/sbr sting`) is a ranged shot, gated on *actual distance*: it lands on the pull while the target is still out of melee — so even a pure **melee** hunter opens with **Hunter's Mark + Serpent Sting** — and then stops once you close in. Both are applied once per target and refreshed exactly when they fall off (SuperWoW spell-id detection). Stings are Poison-school, so they **auto-skip poison-immune mobs** — *Mechanicals* and *Elementals* are skipped by creature type (no wasted cast), and immune *Undead* / bosses are learned after a single cast and then skipped for that fight.
+* **Smart Sting (`Viper > Serpent`):** One sting setting that reads the target — *Viper Sting* against anything with a mana bar (draining casters), *Serpent Sting* for everything else. Pick it in the panel or with `/sbr sting smart`.
 * **No Errant Pulls:** Being a ranged class, the Hunter does **not** auto-acquire a target — it will not grab and pull a random nearby mob, so you always choose what you are shooting.
 * **Aspect Management:** Keeps your combat aspect (Hawk ranged / Wolf melee) up, and can **swap to Aspect of the Viper** when mana runs low, swapping back once you've recovered. Both edges are **your own sliders** — *Viper below* (e.g. 20%) and *Back to combat at* (e.g. 70%) — so you choose how deep the drain goes and how full you refill before returning to DPS. A guard keeps the upper value above the lower one so the aspect can never flap between the two.
 * **Pet Support:** Pet attack, *Mend Pet* below a health slider, **Kill Command** on cooldown (BM), an optional **Baited Shot** fired in the window after the pet crits, and an optional **Smart Pet Taunt** — when the mob peels onto you, the pet's *Growl* is sent to grab it back (off by default; leave it off for melee-weave builds where you want the aggro).
@@ -275,7 +284,7 @@ Cat (DPS), Bear (Tank), Balance (Caster/Moonkin), and **Restoration** (group hea
 
 A full DoT, survival, execute, and pet kit — working from level 1:
 
-* **DoT Priority Engine:** Keeps your enabled damage-over-time effects up in strict priority — *Immolate*, then your chosen Curse, then *Corruption*, then *Siphon Life* — detected by exact spell name (SuperWoW spell ids, with texture fallback). With **Malediction** talented, the secondary *Curse of Agony* that rides alongside a non-Agony main curse is tracked and refreshed on its own too (skipped when the main curse already is Agony or Doom). Recasts are confirmed via SuperWoW's `UNIT_CASTEVENT` rather than assumed successful the instant they're sent — a cast that silently fails retries on the very next press instead of stalling for the rest of the throttle window.
+* **DoT Priority Engine:** Keeps your enabled damage-over-time effects up in strict priority — *Immolate*, then your chosen Curse, then *Siphon Life*, then *Corruption* (the order puts the effect that loses least by going last, last) — detected by exact spell name (SuperWoW spell ids, with texture fallback). With **Malediction** talented, the secondary *Curse of Agony* that rides alongside a non-Agony main curse is tracked and refreshed on its own too (skipped when the main curse already is Agony or Doom). Recasts are confirmed via SuperWoW's `UNIT_CASTEVENT` rather than assumed successful the instant they're sent — a cast that silently fails retries on the very next press instead of stalling for the rest of the throttle window.
 * **Works from Level 1:** A fresh warlock's only damage is *Shadow Bolt*, so the filler **adapts** — the wand filler falls back to Shadow Bolt when no wand is equipped (and a not-yet-learned spell filler does too), then uses the wand automatically the moment you equip one. The DoTs and curse switch themselves on as they are trained.
 * **Dark Harvest, DoT-Aware:** *Dark Harvest* channels the instant it comes off cooldown and wand-fills the gap between channels (falling back to *Shadow Bolt* with no wand equipped) instead of leaving the rotation idle. Before committing to a channel it tops up any enabled DoT that would fall off partway through — the channel's own length and the required buffer are scaled by *Rapid Deterioration* and Dark Harvest's own 30% tick-rate boost, so the check reflects your actual talents rather than a flat number.
 * **Survival & Execute (each optional, by priority):** *Drain Life* self-heals when your health dips (drain-tank safety net); *Health Funnel* tops the pet when it drops, as long as your own health is safe; *Shadowburn* instant-executes under a threshold (skipped with zero Soul Shards in the bag, so it can never stall the rotation on a doomed cast); *Drain Soul* channels in the target's last seconds to bank a Soul Shard, optionally stopping early once you're holding enough shards.
@@ -361,7 +370,7 @@ alias from the AutoRota era, so old macros keep functioning.
 | `/sbr filler <wand/flay/smite>` | Priest | DPS filler choice |
 | `/sbr cp <1-5>` | Rogue | Minimum combo points before finishing |
 | `/sbr curse <alias>` | Warlock | Switch the curse (`coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`) |
-| `/sbr sting <alias>` | Hunter | Maintained sting (`serpent`/`scorpid`/`viper`/`none`) |
+| `/sbr sting <alias>` | Hunter | Maintained sting (`serpent`/`scorpid`/`viper`/`smart`/`none`) — `smart` = Viper on mana users, Serpent otherwise |
 | `/sbr style <bleed/shred>` | Druid | Cat style |
 | `/sbr form <cat/bear/caster/resto>` | Druid | Preferred form/spec |
 | `/sbr dance` | Warrior | Toggle experimental stance dancing |
@@ -383,7 +392,8 @@ alias from the AutoRota era, so old macros keep functioning.
 **Paladin seals** — `sotc`/`crusader`, `sor`/`righteousness`, `soc`/`command`,
 `sow`/`wisdom`, `sol`/`light`, `none`
 
-**Hunter stings** — `ss`/`serpent`, `sco`/`scorpid`, `vs`/`viper`, `none`
+**Hunter stings** — `ss`/`serpent`, `sco`/`scorpid`, `vs`/`viper`, `smart`/`vs>ss` (Viper on
+mana users, else Serpent), `none`
 
 **Warlock curses** — `coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`
 </details>
@@ -408,9 +418,10 @@ alias from the AutoRota era, so old macros keep functioning.
 - **Mind the debuff cap.** Turtle enforces 32 buffs / 16 debuffs per unit. On raid bosses,
   turn off low-value debuff upkeep (that's why *Shadow Word: Pain* and *Demoralizing Shout*
   have toggles).
-- **Weapon imbues and poisons are pre-pull tools, not mid-fight upkeep.** Poisons can't be
-  applied in combat at all, and re-imbuing costs a global cooldown — so Aegis auto-applies
-  out of combat and *reminds* you in combat rather than hijacking your rotation.
+- **Imbues and poisons stay off the rotation macro.** Re-imbuing costs a global cooldown, so
+  Shaman imbue upkeep auto-applies out of combat and only *reminds* you in combat. Poisons
+  need a real click to apply, so they live on the Quick Bar's buttons rather than being cast
+  by the rotation.
 - **PvP and auto-defensives aren't here yet.** No Ice Block, Shield Wall, or Divine Shield
   automation — that's a planned phase, not a shipped feature.
 
@@ -425,6 +436,8 @@ Aegis_SBR/
 │                           swing timer, weapon enchants)
 ├── Aegis_SBR_UI.lua        config window shell, flat-dark theme, layout
 │                           primitives (rows, dropdowns, sliders, spec tabs)
+├── Aegis_SBR_BuffUp.lua    optional upkeep monitors: buff watch + rebuff
+│                           buttons, and the rogue poison Quick Bar
 ├── Aegis_SBR_Minimap.lua   minimap button + addon options panel
 ├── classes/                one rotation module + one config panel per class
 │   ├── Class_Warrior.lua      the priority list and its gates
