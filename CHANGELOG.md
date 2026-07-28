@@ -4,6 +4,28 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v0.15.5 — Warrior Master Strike (opt-in) + README refresh
+
+**Feature + docs.**
+
+- **Warrior: optional *Master Strike*** (*Strikes* section, **default OFF**). The Arms talent
+  is normally skipped as a PvP pick; enable the toggle and it fires on cooldown from a slot
+  **directly below your spec's primary strike**, filling the windows while *Mortal Strike* /
+  *Bloodthirst* / *Shield Slam* cool down — so turning it on never delays your main strike.
+  It's a talent-granted spell, so it's detected once talented and shows *(not learned)* until
+  then. Also `/sbr spell masterstrike|mstrike on|off`.
+  *Its rage cost is estimated (25) — Turtle's exact value isn't documented in the in-repo
+  talent reference. If it ever skips casts it could afford, or attempts one it can't, that
+  single number in `Class_Warrior.lua` is the tuning knob; report the tooltip cost and it can
+  be set exactly. It is likewise not stance-gated, since the stance rule is unverified.*
+- **README refresh:** a new **Links & Community** section (source/releases, issue tracker,
+  in-repo docs; Discord still marked coming soon), a Key Features entry for the opt-in
+  weapon-enchant awareness (Shaman imbue upkeep + Rogue poison reminder), the Hunter aspect
+  section rewritten for the two independent Viper/combat thresholds, the new Warrior Master
+  Strike bullet, and the shout + Master Strike spell aliases added to the Warrior alias list.
+
+---
+
 ## v0.15.4 — Warrior UI: Sunder stacks slider folded into the Sunder Armor toggle
 
 **UI polish.** The Warrior *Sunder stacks* slider is now part of the *Sunder Armor* toggle
