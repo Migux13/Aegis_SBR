@@ -355,5 +355,5 @@ On a melee class, Aegis starts your white swing by toggling the standard **Attac
 
 - 📦 **Source / Releases:** [github.com/Torchlite-bit/Aegis_SBR](https://github.com/Torchlite-bit/Aegis_SBR) — grab the latest version, read the [changelog](CHANGELOG.md), or open an issue if something misbehaves.
 - 🐛 **Bug reports & feature requests:** [open an issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots plus the output of `/sbr debug` (and `/sbr trace` for rotation problems) make a report far easier to act on.
-- 💬 **Discord:** `Coming soon`
+- 💬 **Discord:** [discord.gg/3wTfRU8V9Z](https://discord.gg/3wTfRU8V9Z) — questions, bug reports, and rotation feedback.
 - 📖 **In-repo documentation** (`docs/`): rotation reference, Turtle mechanics, the dependency stack, the phased roadmap, and the per-class rotation audit.
