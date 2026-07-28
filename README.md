@@ -1,36 +1,181 @@
-# Aegis: Single Button Rotation ⚔️ (v0.15.5)
+# Aegis: Single Button Rotation
 
-**Smart, Modular Combat Automation for Turtle WoW (1.18.1)**
+**One button. Your whole rotation.**
 
-## 🛡️ Overview 🛡️
-**Aegis: Single Button Rotation** (`Aegis_SBR`, formerly *AutoRota*) is a lightweight, robust, and highly configurable combat rotation assistant designed specifically for the Turtle WoW 1.18.1 client. Moving beyond the limitations of standard 1.12 "monolithic" macros or basic script loops, Aegis utilizes a modern, modular architecture. It leverages automated frame-by-frame management and smart, situational logic to execute precise combat sequences tailored to your class and specialization.
+[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/3wTfRU8V9Z)
+[![Client](https://img.shields.io/badge/client-WoW%201.12%20(vanilla)-c79c6e?style=flat-square)](https://turtle-wow.org)
+[![Classes](https://img.shields.io/badge/classes-9%2F9-a335ee?style=flat-square)](#class-modules)
+[![Version](https://img.shields.io/badge/version-0.15.5-1eff00?style=flat-square)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-Whether you are leveling through the world or pushing endgame raids, Aegis removes the guesswork from your rotation. By delegating the complexities of ability timing to our frame-perfect execution engine, you can focus on movement, positioning, and tactical awareness, confident that your optimal rotation is running flawlessly in the background
+A 1.12 rotation is a lot of buttons and a lot of bookkeeping — which debuff fell off, is
+the proc up, do I have rage for that. Aegis puts the whole thing on **one key**. Every
+press evaluates your class, spec, resources, procs, and debuff windows, then fires the
+single best ability for that instant. No macro spaghetti, no clipping the global cooldown.
 
+> Built for **Turtle WoW 1.18.1**, which runs the original **WoW 1.12 (vanilla)** client on
+> **Lua 5.0**. Not Classic. Not retail. Real vanilla — with Turtle's custom class changes
+> baked in.
 
-## ⚠️ Important Beta Notice ⚠️
-Aegis is currently in an **active beta state**. As such, the addon is subject to potential errors in both rotation logic and general functionality. We recommend that users monitor combat closely during use, particularly in high-stakes environments like dungeons or raids. Your feedback is instrumental in refining our modular logic and improving the addon's stability as we continue development.
+**[💬 Join the Discord](https://discord.gg/3wTfRU8V9Z)** for help, bug reports, and rotation
+feedback.
 
----
-
-## 🖥️ Key Features 
-
-- **Modular, Lightweight Architecture:** A unified, low-overhead UI shell dynamically loads specialized class modules, ensuring your rotation is optimized for your specific class and talent setup without "bloat".
-- **Frame-Perfect Execution:** Designed for the Turtle WoW / SuperWoW environment, the addon monitors combat frame-by-frame. Using strict single-cast priorities and zero-clipping logic, it ensures only one primary action executes per frame to prevent GCD overlap.
-- **Intelligent Situational Logic:** Beyond static loops, Aegis evaluates real-time combat conditions—such as mana, proc availability, and debuff windows—to make smart, fly-by decisions.
-- **Turtle WoW & SuperWoW Optimized:** Fully compatible with custom 1.18.1 mechanics, including spell queueing (`QueueSpellByName`), weapon swing timing, and custom class expansions.
-- **Locale-Proof Debuff Resolution:** Target debuffs are resolved via precise SuperWoW spell IDs, ensuring upkeep is rank- and locale-proof. Clients without SuperWoW automatically fallback to icon-texture matching.
-- **High-Performance Per-Press:** By caching spellbook lookups and snapshots, the addon replaces heavy scanning with high-speed table reads, ensuring responsiveness even during button spam.
-- **Flexible Target Acquisition:** A global, three-way targeting mode — **Auto** (acquire the nearest enemy when you have none, the default), **Manual** (defer entirely to you or a separate assist addon), or **Assist** (continuously mirror a chosen party/raid member's target, matched **by GUID only** so a same-named mob from a different group is never mistaken for theirs) — set via `/sbr acquire on|off|assist <name>` or the minimap options panel, which adds a live group-member picker for Assist. Ranged modules like the Hunter still opt out of Auto entirely so they never pull a random mob.
-- **User-Centric Configuration:** Includes draggable minimap button control (`/sbrmap` or `/sbr minimap`) with a right-click options panel, a modern flat-dark configuration panel — bundled *PT Sans Narrow* fonts, class-coloured accents, and a clean single-row layout for every setting (toggle, label, right-aligned slider, and value column, with the sliders forming one uniform column) — and robust profile management to seamlessly switch between *Leveling*, *PvP*, or *Raid* presets.
-- **Spec-Aware Focus:** For classes whose rotation branches by spec (Druid, Shaman, Hunter, Mage, and the Paladin's Tank / Damage | Healer split), the configuration panel presents a **spec tab rail** and shows only the active spec's controls — switching tabs writes the same profile field the rotation reads, so the panel always matches the rotation you are actually running. For the Paladin, editing the active profile applies live, so a tab is an immediate mode switch.
-- **Weapon-Enchant Awareness (opt-in):** Reads your live temporary weapon enchant — presence *and* time remaining — via SuperWoW, powering **Shaman imbue upkeep** (auto-applies out of combat, reminds in combat) and a **Rogue pre-pull poison reminder**. Both are off by default, and both stay deliberately conservative: they never overwrite an existing enchant behind your back, and never burn a global cooldown mid-fight unless you opt in.
+> ⚠️ **Active beta.** Rotation logic and general functionality can still have rough edges.
+> Watch your combat closely in dungeons and raids, and tell us what misbehaves — feedback is
+> what sharpens the per-class priorities.
 
 ---
 
-## ⚠️ Included Class Modules (WiP) ⚠️
+## Contents
 
-### 🛡️ Paladin `(Beta)`
+- [What it does](#what-it-does)
+- [Requirements](#requirements) — the client mods Aegis is built on
+- [Install](#install)
+- [Using it](#using-it) — the macro, and the one thing melee must do
+- [Class modules](#class-modules) — all nine, in detail
+- [Commands](#commands)
+- [A few honest notes](#a-few-honest-notes)
+- [Under the hood](#under-the-hood)
+- [Something broken?](#something-broken)
+- [Contributing](#contributing)
+
+---
+
+## What it does
+
+**One press, one cast.** Each press walks your spec's priority list top-down and fires the
+first ability whose conditions pass, then stops. Strict single-cast — it never tries to
+stack two casts into one press and clip your own global cooldown.
+
+**It reads the fight, not a script.** Resources, proc windows, debuff timers, combo points,
+target health, stance/form, range, and your own toggles all gate the list. Target debuffs
+resolve through SuperWoW **spell IDs**, so upkeep is rank- and locale-proof (clients without
+SuperWoW fall back to icon matching).
+
+**It grows with your character.** Every ability is gated on whether you've actually learned
+it, so the same profile plays a level 1 character and a raider — spells switch themselves on
+as you train them, and the panel marks anything untrained as *(not learned)*.
+
+**Profiles, per character.** Keep *Leveling*, *Raid*, and *PvP* setups side by side and
+switch instantly. For the classes whose rotation branches by spec, the config window shows a
+**spec tab rail** and only the active spec's controls — the tab you're on *is* the mode the
+rotation runs.
+
+**Three targeting modes.** **Auto** grabs the nearest enemy when you have none, **Manual**
+defers entirely to you or an assist addon, and **Assist** mirrors a party/raid member's
+target — matched **by GUID**, so a same-named mob from another group is never mistaken for
+theirs. Ranged modules opt out of Auto so they never pull something at random.
+
+**A config panel, not a config file.** Flat-dark theme, class-coloured accents, bundled
+*PT Sans Narrow*, one clean row per setting (toggle · label · slider · value), plus a
+draggable minimap button with its own options panel.
+
+**Weapon-enchant awareness (opt-in).** Reads your live temporary weapon enchant — presence
+*and* time remaining — powering **Shaman imbue upkeep** and a **Rogue pre-pull poison
+reminder**. Both default off, and both stay conservative: they never overwrite an enchant
+behind your back, and never spend a global cooldown mid-fight unless you say so.
+
+---
+
+## Requirements
+
+Aegis is built directly on these. SuperWoW in particular is not optional — cast detection,
+GUID targeting, and spell-ID debuff resolution all come from it.
+
+| Mod | Why Aegis needs it |
+|---|---|
+| **[SuperWoW](https://github.com/balakethelock/SuperWoW/releases/tag/Release)** (v1.5.1+) | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
+| **[Nampower](https://gitea.com/avitasia/nampower/releases/tag/v4.6.1)** (v4.6.1+) | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. ↳ [settings addon](https://gitea.com/avitasia/nampowersettings) |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3/releases)** (v89+) | Accurate distance and line-of-sight checks. |
+| **[SuperCleveRoidMacros](https://github.com/jrc13245/SuperCleveRoidMacros)** | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. ↳ [wiki](https://github.com/jrc13245/SuperCleveRoidMacros/wiki) |
+
+---
+
+## Install
+
+1. Download this repo (**Code → Download ZIP**, or clone it).
+2. Drop the folder into:
+   ```
+   World of Warcraft/Interface/AddOns/Aegis_SBR
+   ```
+3. **The folder must be named exactly `Aegis_SBR`** — GitHub's ZIP unpacks as
+   `Aegis_SBR-main`, so rename it or the client won't load the addon.
+4. Restart the client. Tick **Load out of date AddOns** if prompted.
+
+Keep the bundled `Icons/` and `Fonts/` subfolders intact — they're the UI's textures and
+typeface. (Without `Fonts/` the window silently falls back to the client's default font.)
+
+> **After any update that adds textures, do a full relog** — log out to character select and
+> back in. The 1.12 client only scans for new texture files at login, so `/reload` alone can
+> leave custom art missing.
+
+<details>
+<summary><b>Upgrading from AutoRota (pre-0.14.0)?</b></summary>
+
+The addon folder is now `Aegis_SBR`. **Delete the old `Interface\AddOns\AutoRota\` folder**
+so both can never load at once.
+
+Your per-character profiles migrate automatically on first login (`AutoRotaDB` → `AegisDB`,
+with the old data kept as a rollback backup for a few versions). **Back up your `WTF\`
+folder before that first login.**
+
+If your profiles don't appear: log fully out and copy your character's old saved-variables
+file — `WTF\Account\<ACCOUNT>\<Realm>\<Character>\SavedVariables\AutoRota.lua` →
+`Aegis_SBR.lua` in the same folder — then log back in. (Clients that keep per-character
+variables in one combined `SavedVariables.lua` won't need this.)
+
+`/sbr` is the primary command now, with `/aegis` as the long form; `/ar` still works
+everywhere as a legacy alias.
+</details>
+
+---
+
+## Using it
+
+Your entire combat macro is one line. Put it on your bar and press it. Repeatedly.
+
+```
+/sbr
+```
+
+Open the config window with `/sbr ui` (or left-click the minimap button) to manage profiles,
+flip abilities on and off, and set your thresholds.
+
+| Do this | Get that |
+|---|---|
+| `/sbr` | Fire the rotation — this is your one button |
+| `/sbr ui` | Open the configuration window |
+| `/sbr list` · `/sbr use <name>` | See your profiles · switch to one |
+| `/sbrmap` | Show/hide the minimap button (right-click it for options) |
+| `/sbr debug` | Dump live buff/debuff names — the first stop when something won't fire |
+| `/sbr trace` | Per-press log of what the rotation decided and why |
+
+> ### 🗡️ Melee: put **Attack** on an action bar
+> Aegis keeps your white swing going by toggling the standard **Attack** ability, which it
+> finds by scanning your bars. If it isn't on one, you'll fire abilities without swinging in
+> between. Drag **Attack** from your spellbook (**P** → *General*) onto any free slot.
+>
+> **Druids especially:** Cat/Bear form **replaces your main bar**, so **Attack** must sit on
+> a bar that stays visible while shifted (a side bar or the bottom-right bar) — not slots
+> 1–12.
+>
+> *Exception:* running **SuperCleveRoidMacros**? It manages attacks, and Aegis leaves this
+> alone.
+
+> ### 🏹 Hunters: put **Auto Shot** on an action bar
+> Auto Shot detection is most reliable when the ability is on a bar (**P** → *General*). If
+> you use the melee weave, put **Attack** there too so *Raptor Strike* has swings to ride.
+
+---
+
+## Class modules
+
+All nine classes, each with its own rotation module and config panel. Everything below is
+`(Beta)` — expand a class for the full detail.
+
+<details>
+<summary><b>🛡️ Paladin</b> — roleless seal model, melee-capable healer</summary>
+
 Engineered around an intelligent "Roleless Seal Model" optimized for low-level leveling up to high-tier raiding:
 - **Debuff Upkeep:** Automatically tracks target judgement debuffs by exact spell name (SuperWoW spell ids, with texture fallback). Applies your chosen *Debuff Seal* (e.g., *Seal of the Crusader* or *Seal of Wisdom*) exactly once per mob, then switches immediately to your *Damage Seal*.
 - **Low-Level Safety Guard:** Built-in safeguards automatically bypass the Judgement/Debuff loop if your Paladin is under level 10 and hasn't learned `Judgement` yet, keeping your damage seal active as a permanent auto-attack buff.
@@ -43,16 +188,11 @@ Engineered around an intelligent "Roleless Seal Model" optimized for low-level l
 - **Heal Mode (`/sbr heal on`):** Turns the Paladin into a group healer that still DPSes between heals. It runs even with no attackable target, so it works at range. It picks the most-hurt *reachable* party/raid member (raid- and party-aware), counts its own in-flight heal so it never double-stacks on one target, and **downranks** *Flash of Light* / *Holy Light* to the size of the deficit for mana efficiency — the `+healing` bonus is read automatically from your gear (override with `/sbr healpower <n>`) and *Healing Light* / *Divine Favor* talents are factored in. *Holy Shock* is used **only as an instant heal** here (never for damage), for emergencies (below a configurable %) or for a hurt unit out of melee range. **Melee-holy weaving** is split into two independent toggles, since each strike is a global. **Reload Holy Shock (CS):** with *Blessed Strikes* talented (auto-detected — 100% at 5/5), *Crusader Strike* is woven between heals to **reset Holy Shock**, keeping the emergency instant loaded — but never over an emergency; anyone under the Holy Shock line is healed first. **Holy Strike filler:** in downtime *Holy Strike* is woven so its splash heal tops the melee group, gated by its own **mana floor** so it never starves a heal. A heal-mode **Mana management** section keeps *Seal of Wisdom* on you for **self mana**, with an optional **Judge Wisdom** that stamps *Judgement of Wisdom* on the mob for **group-wide mana** (a global you cannot heal during, so it is opt-in and off by default). The **Tank / Damage | Healer tabs** switch the mode (same as `/sbr heal`), and the tab you are on **is** the active mode — the other tab's settings are ignored. The attack rotation yields the global cooldown while anyone needs healing, so a judgement never steals a heal's cast. Configure it in the *Healing* panel section or via `/sbr healat` and `/sbr hsat`.
 
 > **Heal-mode note:** The per-rank heal values and the talent modifiers are best-effort approximations tuned for Turtle, and live in one table at the top of `Class_Paladin.lua` — if downranking picks a rank that over- or under-heals, that is where to adjust. Targeted healing relies on SuperWoW's unit-argument `CastSpellByName`, so it heals the hurt member without dropping your attack target; worth a quick in-party sanity check on 1.18.1.
+</details>
 
-### 🥷 Rogue `(Beta)`
-A refined evolution of the *ExAutoRogue* logic focused on efficient combo point generation and finishing priority:
-- **Adaptive Combo Builders:** Automatically chooses your highest efficiency spec builder (*Noxious Assault* if known, falling back to *Sinister Strike*), or allows you to force a fixed weapon builder via a profile dropdown.
-- **Finisher Hysteresis Engine:** Dynamically tracks *Slice and Dice* and *Envenom* buffs. It will auto-refresh them efficiently at exactly 1 Combo Point if they are about to expire, otherwise saving points to dump into maximum-damage *Eviscerates*.
-- **Reactionary Counters:** Instantaneous out-of-GCD execution for abilities like *Riposte* during active parry windows.
-- **Cooldown Automation:** Integrates *Adrenaline Rush* and *Blade Flurry* seamlessly, prioritizing them against Elite or Boss targets.
-- **Poison Reminder (opt-in):** Because weapon poisons can't be applied in combat, the *Poisons* toggle gives you a **pre-pull nudge** instead — a chat warning as you enter combat if a weapon poison is missing (off-hand only when you have an off-hand weapon). It never auto-applies. Off by default.
+<details>
+<summary><b>⚔️ Warrior</b> — roleless Arms / Fury / Protection, stance- and rage-aware</summary>
 
-### ⚔️ Warrior `(Beta)`
 A roleless, toggle-driven engine covering Arms, Fury, and Protection from early leveling through endgame raiding. Rather than locking to a spec, you enable the abilities you have and the priority degrades gracefully as you learn them:
 - **All-Spec Roleless Design:** One profile schema serves every spec via simple toggles. Abilities you have not learned yet are skipped automatically and flagged as *(not learned)* in the panel, so the same setup keeps working as you level.
 - **Stance & Rage Aware Casting:** A warrior-specific gate verifies rage, stance, and cooldown *before* committing to a cast, so a stance- or rage-locked ability can never stall the priority chain. Stance rules follow vanilla 1.12 and stay conservative if Turtle relaxes them.
@@ -65,37 +205,21 @@ A roleless, toggle-driven engine covering Arms, Fury, and Protection from early 
 - **Optional Master Strike:** The Arms talent *Master Strike* is available as an opt-in toggle (off by default, since it's mainly a PvP pick). Enabled, it fires on cooldown from a slot **directly below your spec's primary strike**, so it fills the gaps while *Mortal Strike* / *Bloodthirst* / *Shield Slam* are cooling down and never delays them. It appears once talented and shows *(not learned)* until then.
 - **Leveling Toggles (off by default):** *Charge* opens a pull from range in Battle Stance — self-limiting, since the client blocks it once you're in combat, so it only ever fires on the initial gap-close. *Rend* keeps its bleed up in Battle or Defensive Stance and yields during *Execute* so rage funnels there instead. Neither toggle is meant for endgame play.
 - **Reliable Auto-Attack:** If *Attack* isn't placed on an action bar, the addon falls back to starting the swing directly, so melee always engages without a manual `/startattack`.
+</details>
 
-### 🔮 Warlock `(Beta)`
+<details>
+<summary><b>🥷 Rogue</b> — combo-point economy and finisher priority</summary>
 
-A full DoT, survival, execute, and pet kit — working from level 1:
+A refined evolution of the *ExAutoRogue* logic focused on efficient combo point generation and finishing priority:
+- **Adaptive Combo Builders:** Automatically chooses your highest efficiency spec builder (*Noxious Assault* if known, falling back to *Sinister Strike*), or allows you to force a fixed weapon builder via a profile dropdown.
+- **Finisher Hysteresis Engine:** Dynamically tracks *Slice and Dice* and *Envenom* buffs. It will auto-refresh them efficiently at exactly 1 Combo Point if they are about to expire, otherwise saving points to dump into maximum-damage *Eviscerates*.
+- **Reactionary Counters:** Instantaneous out-of-GCD execution for abilities like *Riposte* during active parry windows.
+- **Cooldown Automation:** Integrates *Adrenaline Rush* and *Blade Flurry* seamlessly, prioritizing them against Elite or Boss targets.
+- **Poison Reminder (opt-in):** Because weapon poisons can't be applied in combat, the *Poisons* toggle gives you a **pre-pull nudge** instead — a chat warning as you enter combat if a weapon poison is missing (off-hand only when you have an off-hand weapon). It never auto-applies. Off by default.
+</details>
 
-* **DoT Priority Engine:** Keeps your enabled damage-over-time effects up in strict priority — *Immolate*, then your chosen Curse, then *Corruption*, then *Siphon Life* — detected by exact spell name (SuperWoW spell ids, with texture fallback). With **Malediction** talented, the secondary *Curse of Agony* that rides alongside a non-Agony main curse is tracked and refreshed on its own too (skipped when the main curse already is Agony or Doom). Recasts are confirmed via SuperWoW's `UNIT_CASTEVENT` rather than assumed successful the instant they're sent — a cast that silently fails (most commonly the GCD still active while the wand fires) retries on the very next press instead of stalling for the rest of the throttle window.
-* **Works from Level 1:** A fresh warlock's only damage is *Shadow Bolt*, so the filler **adapts** — the wand filler falls back to Shadow Bolt when no wand is equipped (and a not-yet-learned spell filler does too), then uses the wand automatically the moment you equip one. The DoTs and curse switch themselves on as they are trained.
-* **Dark Harvest, DoT-Aware:** *Dark Harvest* channels the instant it comes off cooldown and wand-fills the gap between channels (falling back to *Shadow Bolt* with no wand equipped) instead of leaving the rotation idle. Before committing to a channel it tops up any enabled DoT that would fall off partway through — the channel's own length and the required buffer are scaled by *Rapid Deterioration* and Dark Harvest's own 30% tick-rate boost, so the check reflects your actual talents rather than a flat number.
-* **Survival & Execute (each optional, by priority):** *Drain Life* self-heals when your health dips (drain-tank safety net); *Health Funnel* tops the pet when it drops, as long as your own health is safe; *Shadowburn* instant-executes under a threshold (skipped with zero Soul Shards in the bag, so it can never stall the rotation on a doomed cast); *Drain Soul* channels in the target's last seconds to bank a Soul Shard, optionally stopping early once you're holding enough shards (*Stop early to keep shards*) instead of draining every kill regardless. Toggles and percent sliders live in the panel's **Survival** and **Execute** sections.
-* **Talent-Aware Nightfall & Rapid Deterioration:** Aegis reads your **talent tree** to detect *Nightfall* and **auto-fires the free instant *Shadow Bolt*** the moment *Shadow Trance* procs — checked ahead of every other priority (including Drain Life) so a longer action started first can never burn through the whole proc window unused. The proc is spent **once per proc** on the rising edge, so a lingering buff icon never triggers a wasted full-cast Shadow Bolt. *Rapid Deterioration* (2 ranks, 3% shorter *Corruption* / *Curse of Agony* / *Siphon Life* / *Dark Harvest* duration per rank) is likewise read from your talent rank and scales every duration estimate the rotation makes. Other talented abilities don't need this: *Shadowburn*, *Conflagrate*, *Siphon Life*, and *Drain Soul* appear in your spellbook only when talented, so they're detected for free.
-* **Curse Selection:** One curse per target, switchable from the panel or mid-fight with `/sbr curse <alias>` (`coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`).
-* **Life Tap & Low-Mana Safety:** Triggers *Life Tap* only when mana dips below your threshold **and** health is safely above your floor. A separate, lower mana floor is a last-resort safety valve — below it, a DoT that needs recasting but can't be afforded no longer gets queued and left to fail; the rotation prefers Life Tap if safe, otherwise drops to the wand (free, and can even regen mana against a mob carrying a mana-return debuff).
-* **Cast Queueing & Pet Support:** Cast-time spells use SuperWoW's `QueueSpellByName` so the rotation never clips a cast (with a smart exception while wanding, where a direct cast fires immediately). The wand also stops itself **ahead of** a tracked DoT expiring (within 1.5s) rather than reactively trying to interrupt a shot that may already be mid-flight the instant the DoT falls off. A `SPELLCAST_CHANNEL_START/STOP` watcher also **protects your channels** — *Drain Life*, *Drain Soul*, and *Dark Harvest* can't be clipped by a DoT refresh or the wand on the next press. Optionally sends your pet onto the target, with a **Pet only in melee range** toggle so an accidentally targeted far enemy doesn't pull the pet away.
-
-### 🐾 Druid `(Beta)`
-
-Cat (DPS), Bear (Tank), Balance (Caster/Moonkin), and now **Restoration** (group healer) in one form-adaptive engine — working from level 1:
-
-* **Form-Adaptive Rotation:** Each press follows the form you are actually in — Cat Form runs the DPS rotation, Bear/Dire Bear runs the tank rotation, Moonkin (or a *Caster/Moonkin* preference) runs the Balance rotation, and caster form shifts you into your profile's preferred form (panel dropdown or `/sbr form cat|bear|caster`). One profile, one macro, every job.
-* **Level 1 and Up:** Before any combat form is learned (Bear at 10, Cat at 20), the caster rotation carries the character — Moonfire upkeep plus Wrath is exactly the right early-leveling loop — and the profile grows into its form automatically the moment it is trained.
-* **Balance / Eclipse Weaving:** Keeps *Moonfire* and *Insect Swarm* up, then chain-casts your primary nuke (Wrath or Starfire) to fish for **Eclipse** procs and swaps to the empowered opposite nuke the instant one fires. Nukes are queued through SuperWoW, so spamming never clips a cast — the press during your current cast lines up the buffed spell for the moment the proc window opens. Entering Moonkin (when learned) is automatic for the mana discount.
-* **Restoration (Group Healer):** A `resto` spec turns the Druid into a party/raid healer that runs **with no enemy targeted** (so it works at range) and heals via SuperWoW's unit-argument cast without dropping your current target. It picks the most-hurt *reachable* member and **downranks Healing Touch** to the size of the deficit for mana efficiency (counting its own in-flight heal so it never double-stacks, with `+healing` factored through *Gift of Nature*). The full toolkit fires by priority: *Innervate* when low on mana, **Nature's Swiftness → instant max Healing Touch** for a target in real trouble, *Swiftmend* for a no-cast top-up off your own Rejuv/Regrowth, *Regrowth* for a big single-target burst, *Rejuvenation* kept rolling at its best affordable rank, and optional *Wild Growth* (AoE) and *Lifebloom*. When the group is topped it can optionally **weave damage** to use the downtime — *Moonfire* + *Wrath*, toggled with `/sbr weave` (off by default, enemy-targeted and mana-gated so it never starves heals). Select it with `/sbr form resto` (or `/sbr new <name> tree` for a ready-made profile). *(Heals in caster form — the rotation drops any active shapeshift first; **Tree of Life auto-shift is off for now**, pending its 1.18.1 cast rules. The **Restoration** config panel now exposes the full kit — heal threshold, heal power, per-ability toggles with their thresholds (Innervate, Nature's Swiftness, Swiftmend, Regrowth), a Wild Growth toggle + ally-count, Rejuvenation / Lifebloom, and the damage-weave toggle + mana-floor — each greying out when off-spec or not yet learned; the per-rank heal values still live in `Class_Druid.lua`.)*
-* **Defensive Bear (HP Management):** Optional hysteresis safety net, same design as the Paladin's resource sliders — drop below your low threshold (default 35%) and the rotation forces Bear Form from **any** form, fires *Frenzied Regeneration* on cooldown, and keeps tanking the mob down behind bear armor; climb back over your high threshold (default 70%) and it releases you to your preferred form automatically. Off by default and inert until Bear Form is learned.
-* **Two Turtle Cat Styles:** *Claw & Bleed* keeps *Rake* and *Rip* rolling and builds with *Claw* (pairs with bleed-energy talents like *Ancient Brutality*); *Shred & Powershift* builds with *Shred* and finishes with *Ferocious Bite* for bleed-immune bosses (MC/BWL). Swap mid-fight with `/sbr style bleed|shred`.
-* **Smart Finishers:** At your combo threshold the bleed style applies *Rip* if it is not ticking and spends *Ferocious Bite* while it is — combo points are never dumped into a redundant bleed.
-* **Powershifting (opt-in):** In the Shred style, when energy bottoms out below your slider the rotation shifts to caster and straight back into Cat for a fresh energy bar — and **never while Tiger's Fury is active**, so the buff is not thrown away.
-* **Stealth Opener & Upkeep:** Opens from *Prowl* with *Ravage* (auto, if known) or *Pounce*, and keeps *Faerie Fire (Feral)* and *Tiger's Fury* running.
-* **Bear Tanking:** *Faerie Fire (Feral)* as the **ranged opener** (instant, 30yd — starts threat + damage on the pull before the mob reaches you), optional **Growl** taunt that grabs threat on the pull and whenever the target stops attacking you (off when you already hold aggro, so solo play never wastes it), *Demoralizing Roar* upkeep, *Maul* as the rage dump, *Swipe* leading under `/sbr aoe`, and optional *Enrage* when rage-starved (in combat only — it lowers armor, so it is off by default). *(Moonfire cannot be cast in bear form, so Faerie Fire is the bear's ranged opener.)*
-* **Form-Aware Auto-Attack:** The white swing is started automatically in **Cat and Bear** (and never while casting in caster/Moonkin). Note: for this to work in a form, the **Attack** ability must sit on an action-bar slot that the form bar does *not* replace (e.g. a side or bottom bar), or let *SuperCleveRoidMacros* handle attacks.
-
-### 🏹 Hunter `(Beta)`
+<details>
+<summary><b>🏹 Hunter</b> — Auto / Ranged / Melee, reworked for Turtle's Survival</summary>
 
 Reworked for Turtle WoW 1.18.1's hunter changes, with **Auto**, **Ranged**, and **Melee** playstyles selectable per profile (`/sbr mode auto|ranged|melee`):
 
@@ -110,250 +234,276 @@ Reworked for Turtle WoW 1.18.1's hunter changes, with **Auto**, **Ranged**, and 
 * **AoE & Cooldowns:** *Volley* leads then *Multi-Shot* fills under `/sbr aoe`. *Rapid Fire* and *Bestial Wrath* automate on the usual three-state model — always, elite/boss only, or off.
 
 > **Verification note:** A few 1.18.1 specifics are best-effort and gated by `KnowsSpell`, so an unknown name simply no-ops. If *Kill Command*, *Baited Shot*, the **Lock and Load** buff, or the mana aspect (tried: *Aspect of the Viper*, *Aspect of the Beast*) are not firing, run `/sbr debug` and check the exact names — they drop into one place in `Class_Hunter.lua`. Auto mode uses `CheckInteractDistance` (~10yd) as its melee proxy; `/sbr trace` shows the effective mode as `mode=auto/melee` or `mode=auto/ranged`.
+</details>
 
-### ⚡ Shaman `(Beta)`
+<details>
+<summary><b>⚡ Shaman</b> — Enhancement / Elemental / Tank / Restoration, with totem upkeep</summary>
 
-Enhancement, Elemental, Tank, and now **Restoration** (group healer) in one mode-adaptive engine — working from level 1:
+Enhancement, Elemental, Tank, and **Restoration** (group healer) in one mode-adaptive engine — working from level 1:
 
 * **Mode-Adaptive Rotation:** Pick **Enhancement** (melee: auto-attack, Stormstrike, Lightning Strike, a shock, with a Lightning Bolt weave), **Elemental** (caster: Flame Shock + Lightning Bolt building Electrify), **Tank** (Earth Shock threat, Stormstrike, Lightning Strike, optional Earthshaker Slam taunt), or **Restoration** (group healer — see below) — panel dropdown or `/sbr mode enhancement|elemental|tank|resto`.
-* **Restoration (Group Healer):** A `resto` mode turns the Shaman into a party/raid healer that runs **with no enemy targeted** (so it works at range) and heals via SuperWoW's unit-argument cast without dropping your current target. It picks the most-hurt *reachable* member and **downranks Healing Wave** to the size of the deficit for mana efficiency (counting its own in-flight heal so it never double-stacks). Shaman healing is all direct — no HoTs — so the kit fires by priority: *Mana Tide Totem* when low on mana, **Nature's Swiftness-equivalent → instant Healing Wave** for emergencies, **Lesser Healing Wave** for a fast single-target save (which wins over AoE), *Chain Heal* when several are hurt, then downranked *Healing Wave* as the fill. During lulls it keeps **Water Shield** up and maintains the full totem set — a *Mana Spring* water staple by default, with earth/fire/air pickers — the same shared **Totems** section used by every spec (see below). It can also optionally **weave damage** in that downtime — *Lightning Bolt*, toggled with `/sbr weave` (off by default, enemy-targeted and mana-gated so it never starves heals). Select it with `/sbr mode resto`. *(The **Restoration** config panel now exposes the full kit — heal threshold, heal power, per-ability toggles with their thresholds (Mana Tide, Nature's Swiftness, Lesser Healing Wave, Chain Heal), a Maintain-totems master toggle with Water / Earth / Fire / Air pickers, and the damage-weave toggle + mana-floor — each greying out when off-spec or not yet learned; the per-rank heal values still live in `Class_Shaman.lua`.)*
+* **Restoration (Group Healer):** A `resto` mode turns the Shaman into a party/raid healer that runs **with no enemy targeted** (so it works at range) and heals via SuperWoW's unit-argument cast without dropping your current target. It picks the most-hurt *reachable* member and **downranks Healing Wave** to the size of the deficit for mana efficiency (counting its own in-flight heal so it never double-stacks). Shaman healing is all direct — no HoTs — so the kit fires by priority: *Mana Tide Totem* when low on mana, **Nature's Swiftness-equivalent → instant Healing Wave** for emergencies, **Lesser Healing Wave** for a fast single-target save (which wins over AoE), *Chain Heal* when several are hurt, then downranked *Healing Wave* as the fill. During lulls it keeps **Water Shield** up and maintains the full totem set. It can also optionally **weave damage** in that downtime — *Lightning Bolt*, toggled with `/sbr weave` (off by default, enemy-targeted and mana-gated so it never starves heals).
 * **Works from Level 1:** A fresh shaman only has *Lightning Bolt* and melee, so the Lightning Bolt filler carries the early levels and everything else — shocks, shields, Stormstrike, Lightning Strike, totems — switches itself on through `KnowsSpell` as it's trained.
 * **Talent Automation:** *Stormstrike* and *Lightning Strike* are talent abilities that appear in the spellbook when talented, so they're auto-included when learned (Stormstrike's Nature self-buff is followed by a shock to consume it). *Elemental Focus* grants **no spell** — it's a passive crit proc (Clearcasting, 60% cheaper next spell) — so Aegis reads the **talent tree** to detect it and surface the proc, the same approach used for the Warlock's Nightfall.
 * **Shield & Shock:** Keeps your chosen shield up (*Lightning* for damage/threat, *Water* for mana) and casts one shock on the shared cooldown — *Flame Shock* maintained as a DoT, *Earth/Frost* on cooldown. Switch with `/sbr shield` and `/sbr shock`.
-* **Weapon Imbue Upkeep (opt-in):** The *Weapon imbue* section keeps a **main-hand** imbue up (*Rockbiter / Flametongue / Frostbrand / Windfury*). When the weapon is bare it auto-casts the imbue **out of combat** (or on approach); **in combat** it only re-imbues with the *Apply in combat* opt-in (that's a global cooldown), otherwise it just reminds you. If the imbue is present but running low (the *Warn under* minutes slider) it warns rather than overwriting. Off by default; main-hand only for now. *(Detection uses SuperWoW's `GetWeaponEnchantInfo`; imbue names are `KnowsSpell`-gated — confirm with `/sbr debug` if one isn't recognized.)*
+* **Weapon Imbue Upkeep (opt-in):** The *Weapon imbue* section keeps a **main-hand** imbue up (*Rockbiter / Flametongue / Frostbrand / Windfury*). When the weapon is bare it auto-casts the imbue **out of combat** (or on approach); **in combat** it only re-imbues with the *Apply in combat* opt-in (that's a global cooldown), otherwise it just reminds you. If the imbue is present but running low (the *Warn under* minutes slider) it warns rather than overwriting. Off by default; main-hand only for now.
 * **Totems (every spec) & Cooldowns:** A shared **Totems** section maintains a full four-element set — Water, Earth, Fire, Air pickers, each with sensible per-spec defaults (Enhancement: Windfury / Searing / Strength / Mana Spring; Elemental: Grace of Air / Searing / Mana Spring; Tank: Stoneskin / Grounding / Mana Spring) — during a lull in **every** mode, not just Restoration. Re-drop timing is confirmed from your actual casts via SuperWoW's `UNIT_CASTEVENT` rather than a blind clock, so a manual re-drop or a Mana Tide bump resets the right element's timer. *Elemental Mastery* and self-*Bloodlust* round out the cooldowns.
 
-> **Verification note:** Buff/proc names are best-effort — confirm the **Clearcasting** proc, the **Stormstrike** self-buff, and the **Searing Totem** / **Earthshaker Slam** spell names in-game with `/sbr talents` and `/sbr debug` if anything isn't firing; the talent name sits in one constant in `Class_Shaman.lua`. For **Restoration**, the same applies to the **Nature's Swiftness-equivalent** (tries `Nature's Swiftness`, then `Ancestral Swiftness`), **Mana Tide Totem**, and the **totem names** in the picker tables — and the heal rank values are vanilla baselines, with the totem re-drop intervals (55s water / 110s others) likely wanting a tune to Turtle's durations.
+> **Verification note:** Buff/proc names are best-effort — confirm the **Clearcasting** proc, the **Stormstrike** self-buff, and the **Searing Totem** / **Earthshaker Slam** spell names in-game with `/sbr talents` and `/sbr debug` if anything isn't firing. For **Restoration**, the same applies to the **Nature's Swiftness-equivalent** (tries `Nature's Swiftness`, then `Ancestral Swiftness`), **Mana Tide Totem**, and the **totem names** in the picker tables — and the heal rank values are vanilla baselines, with the totem re-drop intervals (55s water / 110s others) likely wanting a tune to Turtle's durations.
+</details>
 
-### 🌟 Priest `(Beta)`
+<details>
+<summary><b>🐾 Druid</b> — Cat / Bear / Balance / Restoration, form-adaptive</summary>
+
+Cat (DPS), Bear (Tank), Balance (Caster/Moonkin), and **Restoration** (group healer) in one form-adaptive engine — working from level 1:
+
+* **Form-Adaptive Rotation:** Each press follows the form you are actually in — Cat Form runs the DPS rotation, Bear/Dire Bear runs the tank rotation, Moonkin (or a *Caster/Moonkin* preference) runs the Balance rotation, and caster form shifts you into your profile's preferred form (panel dropdown or `/sbr form cat|bear|caster`). One profile, one macro, every job.
+* **Level 1 and Up:** Before any combat form is learned (Bear at 10, Cat at 20), the caster rotation carries the character — Moonfire upkeep plus Wrath is exactly the right early-leveling loop — and the profile grows into its form automatically the moment it is trained.
+* **Balance / Eclipse Weaving:** Keeps *Moonfire* and *Insect Swarm* up, then chain-casts your primary nuke (Wrath or Starfire) to fish for **Eclipse** procs and swaps to the empowered opposite nuke the instant one fires. Nukes are queued through SuperWoW, so spamming never clips a cast. Entering Moonkin (when learned) is automatic for the mana discount.
+* **Restoration (Group Healer):** A `resto` spec turns the Druid into a party/raid healer that runs **with no enemy targeted** and heals via SuperWoW's unit-argument cast without dropping your current target. It picks the most-hurt *reachable* member and **downranks Healing Touch** to the size of the deficit (counting its own in-flight heal, with `+healing` factored through *Gift of Nature*). The kit fires by priority: *Innervate* when low on mana, **Nature's Swiftness → instant max Healing Touch** for a target in real trouble, *Swiftmend* for a no-cast top-up off your own Rejuv/Regrowth, *Regrowth* for a big single-target burst, *Rejuvenation* kept rolling at its best affordable rank, and optional *Wild Growth* (AoE) and *Lifebloom*. When the group is topped it can optionally **weave damage** — *Moonfire* + *Wrath*, toggled with `/sbr weave`. Select it with `/sbr form resto` (or `/sbr new <name> tree` for a ready-made profile). *(Heals in caster form — the rotation drops any active shapeshift first; **Tree of Life auto-shift is off for now**, pending its 1.18.1 cast rules.)*
+* **Defensive Bear (HP Management):** Optional hysteresis safety net — drop below your low threshold (default 35%) and the rotation forces Bear Form from **any** form, fires *Frenzied Regeneration* on cooldown, and keeps tanking behind bear armor; climb back over your high threshold (default 70%) and it releases you to your preferred form. Off by default and inert until Bear Form is learned.
+* **Two Turtle Cat Styles:** *Claw & Bleed* keeps *Rake* and *Rip* rolling and builds with *Claw* (pairs with bleed-energy talents like *Ancient Brutality*); *Shred & Powershift* builds with *Shred* and finishes with *Ferocious Bite* for bleed-immune bosses (MC/BWL). Swap mid-fight with `/sbr style bleed|shred`.
+* **Smart Finishers:** At your combo threshold the bleed style applies *Rip* if it is not ticking and spends *Ferocious Bite* while it is — combo points are never dumped into a redundant bleed.
+* **Powershifting (opt-in):** In the Shred style, when energy bottoms out below your slider the rotation shifts to caster and straight back into Cat for a fresh energy bar — and **never while Tiger's Fury is active**, so the buff is not thrown away.
+* **Stealth Opener & Upkeep:** Opens from *Prowl* with *Ravage* (auto, if known) or *Pounce*, and keeps *Faerie Fire (Feral)* and *Tiger's Fury* running.
+* **Bear Tanking:** *Faerie Fire (Feral)* as the **ranged opener** (instant, 30yd), optional **Growl** taunt that grabs threat on the pull and whenever the target stops attacking you, *Demoralizing Roar* upkeep, *Maul* as the rage dump, *Swipe* leading under `/sbr aoe`, and optional *Enrage* when rage-starved (in combat only — it lowers armor, so it is off by default). *(Moonfire cannot be cast in bear form, so Faerie Fire is the bear's ranged opener.)*
+* **Form-Aware Auto-Attack:** The white swing is started automatically in **Cat and Bear** (and never while casting in caster/Moonkin) — see the action-bar note in [Using it](#using-it).
+</details>
+
+<details>
+<summary><b>🔮 Warlock</b> — DoT priority, Dark Harvest, Nightfall procs</summary>
+
+A full DoT, survival, execute, and pet kit — working from level 1:
+
+* **DoT Priority Engine:** Keeps your enabled damage-over-time effects up in strict priority — *Immolate*, then your chosen Curse, then *Corruption*, then *Siphon Life* — detected by exact spell name (SuperWoW spell ids, with texture fallback). With **Malediction** talented, the secondary *Curse of Agony* that rides alongside a non-Agony main curse is tracked and refreshed on its own too (skipped when the main curse already is Agony or Doom). Recasts are confirmed via SuperWoW's `UNIT_CASTEVENT` rather than assumed successful the instant they're sent — a cast that silently fails retries on the very next press instead of stalling for the rest of the throttle window.
+* **Works from Level 1:** A fresh warlock's only damage is *Shadow Bolt*, so the filler **adapts** — the wand filler falls back to Shadow Bolt when no wand is equipped (and a not-yet-learned spell filler does too), then uses the wand automatically the moment you equip one. The DoTs and curse switch themselves on as they are trained.
+* **Dark Harvest, DoT-Aware:** *Dark Harvest* channels the instant it comes off cooldown and wand-fills the gap between channels (falling back to *Shadow Bolt* with no wand equipped) instead of leaving the rotation idle. Before committing to a channel it tops up any enabled DoT that would fall off partway through — the channel's own length and the required buffer are scaled by *Rapid Deterioration* and Dark Harvest's own 30% tick-rate boost, so the check reflects your actual talents rather than a flat number.
+* **Survival & Execute (each optional, by priority):** *Drain Life* self-heals when your health dips (drain-tank safety net); *Health Funnel* tops the pet when it drops, as long as your own health is safe; *Shadowburn* instant-executes under a threshold (skipped with zero Soul Shards in the bag, so it can never stall the rotation on a doomed cast); *Drain Soul* channels in the target's last seconds to bank a Soul Shard, optionally stopping early once you're holding enough shards.
+* **Talent-Aware Nightfall & Rapid Deterioration:** Aegis reads your **talent tree** to detect *Nightfall* and **auto-fires the free instant *Shadow Bolt*** the moment *Shadow Trance* procs — checked ahead of every other priority (including Drain Life) so a longer action started first can never burn through the whole proc window unused. The proc is spent **once per proc** on the rising edge, so a lingering buff icon never triggers a wasted full-cast Shadow Bolt. *Rapid Deterioration* (2 ranks, 3% shorter *Corruption* / *Curse of Agony* / *Siphon Life* / *Dark Harvest* duration per rank) is likewise read from your talent rank and scales every duration estimate the rotation makes.
+* **Curse Selection:** One curse per target, switchable from the panel or mid-fight with `/sbr curse <alias>` (`coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`).
+* **Life Tap & Low-Mana Safety:** Triggers *Life Tap* only when mana dips below your threshold **and** health is safely above your floor. A separate, lower mana floor is a last-resort safety valve — below it, a DoT that needs recasting but can't be afforded no longer gets queued and left to fail; the rotation prefers Life Tap if safe, otherwise drops to the wand.
+* **Cast Queueing & Pet Support:** Cast-time spells use SuperWoW's `QueueSpellByName` so the rotation never clips a cast. The wand also stops itself **ahead of** a tracked DoT expiring (within 1.5s) rather than reactively trying to interrupt a shot that may already be mid-flight. A channel watcher **protects your channels** — *Drain Life*, *Drain Soul*, and *Dark Harvest* can't be clipped by a DoT refresh or the wand on the next press. Optionally sends your pet onto the target, with a **Pet only in melee range** toggle.
+</details>
+
+<details>
+<summary><b>🌟 Priest</b> — Shadow/leveling damage and Disc/Holy healing in one toggle</summary>
 
 Shadow/leveling damage and Discipline/Holy healing in one module, switched by a single toggle — working from level 1:
 
 * **Two Modes, One Toggle:** with *Heal mode* **off** the priest runs the **shadow/leveling damage** rotation; with it **on** (`/sbr heal on`, or the panel) it becomes a **group healer that weaves damage between heals**. Heal mode runs even with no attackable target, so it works at range.
-* **Leveling & the 5-Second Rule:** *Mind Blast* on cooldown (the pull and the *Shadow Weaving* trigger), *Shadow Word: Pain* and (Undead) *Devouring Plague* kept rolling, *Holy Fire* when out of Shadowform — then the **wand carries the filler while mana regenerates**. Aegis is a rotation engine, not a HUD, so it *acts* on the five-second rule rather than drawing a timer: when mana drops below a configurable floor the filler falls back to the wand (`/sbr filler wand|flay|smite`) so the priest never casts itself dry. A **Use wand** checkbox toggles wand-weaving off entirely (the priest then keeps casting and won't wand to regen), and if **no wand is equipped** it automatically fills with *Mind Flay* or *Smite* instead — so the wand is never a dead press.
+* **Leveling & the 5-Second Rule:** *Mind Blast* on cooldown (the pull and the *Shadow Weaving* trigger), *Shadow Word: Pain* and (Undead) *Devouring Plague* kept rolling, *Holy Fire* when out of Shadowform — then the **wand carries the filler while mana regenerates**. Aegis is a rotation engine, not a HUD, so it *acts* on the five-second rule rather than drawing a timer: when mana drops below a configurable floor the filler falls back to the wand (`/sbr filler wand|flay|smite`) so the priest never casts itself dry. A **Use wand** checkbox toggles wand-weaving off entirely, and if **no wand is equipped** it automatically fills with *Mind Flay* or *Smite* instead — so the wand is never a dead press.
 * **Spirit Tap Finisher:** under a configurable target-health %, the rotation bursts with *Mind Blast* then *Smite* to **secure the killing blow** — and the experience that feeds *Spirit Tap*.
 * **Mitigation, Not Over-Bubbling:** *Power Word: Shield* is cast when a mob reaches melee or you drop below half health — and it is **gated on *Weakened Soul*** in every mode, so it never wastes a cast trying to re-shield through the debuff.
-* **Shadow (endgame):** hold *Shadowform* (which auto-skips every Holy cast), open *Mind Blast* for *Shadow Weaving*, keep the DoTs up, and fill with channelled *Mind Flay*. **Turn *Shadow Word: Pain* off for raids** to respect debuff-slot limits — *Mind Blast* and *Mind Flay* then carry the damage.
-* **Responsive Healing (Disc/Holy):** healing is triage, not a fixed rotation. Aegis picks the most-hurt *reachable* party/raid member and **downranks** *Heal* / *Greater Heal* / *Flash Heal* to the size of the deficit for mana efficiency (the `+healing` bonus is read from gear, override `/sbr healpower <n>`; *Spiritual Healing* is factored in). *Flash Heal* is **reserved for emergencies** (a target near death, `/sbr flashat <%>`), *Greater Heal* covers big deficits, *Heal* the efficient sustained healing, and *Renew* / *Power Word: Shield* maintain a mildly hurt unit. *Prayer of Healing* fires when several members are hurt, **fronted by *Inner Focus*** (when ready) to negate its mana cost.
-* **Offensive Weave & Lightwell:** between heals it can weave *Smite* / *Holy Fire* as offensive support (for *Enlighten*-style talents), and place *Lightwell* when out of combat.
+* **Shadow (endgame):** hold *Shadowform* (which auto-skips every Holy cast), open *Mind Blast* for *Shadow Weaving*, keep the DoTs up, and fill with channelled *Mind Flay*. **Turn *Shadow Word: Pain* off for raids** to respect debuff-slot limits.
+* **Responsive Healing (Disc/Holy):** healing is triage, not a fixed rotation. Aegis picks the most-hurt *reachable* party/raid member and **downranks** *Heal* / *Greater Heal* / *Flash Heal* to the size of the deficit (the `+healing` bonus is read from gear, override `/sbr healpower <n>`; *Spiritual Healing* is factored in). *Flash Heal* is **reserved for emergencies** (`/sbr flashat <%>`), *Greater Heal* covers big deficits, *Heal* the efficient sustained healing, and *Renew* / *Power Word: Shield* maintain a mildly hurt unit. *Prayer of Healing* fires when several members are hurt, **fronted by *Inner Focus*** (when ready) to negate its mana cost.
+* **Offensive Weave & Lightwell:** between heals it can weave *Smite* / *Holy Fire* as offensive support, and place *Lightwell* when out of combat.
 
-> **Verification note:** Heal values are tuned approximations — the rank tables sit at the top of `Class_Priest.lua`; adjust them if downranking over- or under-heals. The *Shadow Weaving* / proc behaviour and the exact *Enlighten* mechanic are best-effort, so confirm names in-game with `/sbr talents` and `/sbr debug` if anything isn't firing. Healing and the no-target-drop heal cast rely on SuperWoW's unit-arg casting. *(Multi-target Shadow spreads its DoTs as you tab between mobs; the engine is single-target by design and does not tab for you.)*
+> **Verification note:** Heal values are tuned approximations — the rank tables sit at the top of `Class_Priest.lua`; adjust them if downranking over- or under-heals. The *Shadow Weaving* / proc behaviour and the exact *Enlighten* mechanic are best-effort, so confirm names in-game with `/sbr talents` and `/sbr debug`. *(Multi-target Shadow spreads its DoTs as you tab between mobs; the engine is single-target by design and does not tab for you.)*
+</details>
 
----
-
-### 🪄 Mage `(Beta)`
+<details>
+<summary><b>🪄 Mage</b> — Frost / Fire / Arcane, with Turtle's custom spells</summary>
 
 Frost, Fire, and Arcane in one mode-adaptive module, working from level 1 to raiding — switch specs live with `/sbr mode frost|fire|arcane`:
 
-* **Three Specs, One Button:** **Frost** (the kiting / *Icicles* spec and best leveler), **Fire** (Scorch debuff + Fireball burst), or **Arcane** (Rupture upkeep + Arcane Missiles). The panel *Spec* dropdown or `/sbr mode` switches between them; every ability is *KnowsSpell*-gated, so a level 1 mage (Fireball, then Frostbolt at ~4) plays correctly and each spell switches itself on as it is trained.
-* **Frost — Kite & Icicles:** *Frostbolt* nuke, *Frost Nova* to root a mob that reaches melee (so you step back and wand), *Cone of Cold* as a close-range slow, and *Ice Barrier* kept up (a shield that also boosts Frost damage). *Icicles* is cast whenever its cooldown is up — the Turtle freeze-reset is handled implicitly: *Frostbite* / *Flash Freeze* keep resetting that cooldown, so the engine fires Icicles in the empowered window automatically. On freeze-immune bosses this lands as `Frost Nova ➔ Icicles ➔ Frostbolt`.
-* **Fire — Debuff & Burst:** *Combustion* on cooldown, *Pyroblast* as a **pull-only opener** (gated to a near-full-health target so it is never a 6-second cast stuck mid-fight), *Scorch* to build and maintain the *Fire Vulnerability* debuff to a configurable stack count, *Fire Blast* on cooldown (the instant / movement / finisher tool), then *Fireball*. A per-target Scorch throttle means *Fireball* still fills if the debuff can't be read.
+* **Three Specs, One Button:** **Frost** (the kiting / *Icicles* spec and best leveler), **Fire** (Scorch debuff + Fireball burst), or **Arcane** (Rupture upkeep + Arcane Missiles). The panel *Spec* dropdown or `/sbr mode` switches between them; every ability is *KnowsSpell*-gated, so a level 1 mage plays correctly and each spell switches itself on as it is trained.
+* **Frost — Kite & Icicles:** *Frostbolt* nuke, *Frost Nova* to root a mob that reaches melee, *Cone of Cold* as a close-range slow, and *Ice Barrier* kept up (a shield that also boosts Frost damage). *Icicles* is cast whenever its cooldown is up — the Turtle freeze-reset is handled implicitly: *Frostbite* / *Flash Freeze* keep resetting that cooldown, so the engine fires Icicles in the empowered window automatically.
+* **Fire — Debuff & Burst:** *Combustion* on cooldown, *Pyroblast* as a **pull-only opener** (gated to a near-full-health target so it is never a 6-second cast stuck mid-fight), *Scorch* to build and maintain the *Fire Vulnerability* debuff to a configurable stack count, *Fire Blast* on cooldown, then *Fireball*. A per-target Scorch throttle means *Fireball* still fills if the debuff can't be read.
 * **Arcane — Haste & Upkeep:** keep *Arcane Rupture* on the target, pop *Arcane Power* on cooldown, use *Arcane Surge* **while not hasted** (it is skipped under Arcane Power / MQG, whose haste does not scale its 1.5s GCD), and fill with *Arcane Missiles*.
-* **Leveling "Nuke then Wand":** the golden rule of Vanilla mage leveling — nuke a mob to ~30–50% then **wand it to death** to conserve mana. Below a target-health threshold (default 40%, `/sbr wandhp <0-100>`) or a mana floor the rotation finishes with the wand; a **Use wand** toggle and the no-wand auto-fallback mirror the Priest. The `frost` / `fire` / `arcane` presets set wand-finish to 0% for pure caster / raid play.
-* **AoE Mode (`/sbr aoe`):** kite-AoE — *Frost Nova* to freeze, *Cone of Cold* to snare, *Icicles*, then *Arcane Explosion* to finish. *Evocation* restores mana when low (in combat, target not about to die), and channels (*Arcane Missiles*, *Icicles*, *Blizzard*, *Evocation*) are never clipped.
+* **Leveling "Nuke then Wand":** the golden rule of Vanilla mage leveling — nuke a mob to ~30–50% then **wand it to death** to conserve mana. Below a target-health threshold (default 40%, `/sbr wandhp <0-100>`) or a mana floor the rotation finishes with the wand. The `frost` / `fire` / `arcane` presets set wand-finish to 0% for pure caster / raid play.
+* **AoE Mode (`/sbr aoe`):** kite-AoE — *Frost Nova* to freeze, *Cone of Cold* to snare, *Icicles*, then *Arcane Explosion* to finish. *Evocation* restores mana when low, and channels (*Arcane Missiles*, *Icicles*, *Blizzard*, *Evocation*) are never clipped.
 
-> **Verification note:** Turtle's custom spells were confirmed by exact name against the client spell DB (*Icicles*, *Arcane Rupture*, *Arcane Surge*, *Flash Freeze*, *Fire Vulnerability*), but their **proc / stack behaviour is best-effort** — confirm the *Fire Vulnerability* stack debuff, the *Arcane Rupture* buff-vs-debuff, and the MQG haste-buff name in-game with `/sbr debug` if something isn't firing. The precise *Frost Nova* / *Cone of Cold* weaving for maximum *Flash Freeze* procs on bosses is a manual micro-optimization the engine approximates by casting *Icicles* on cooldown. **Ground-targeted AoE (*Blizzard*, *Flamestrike*) is not auto-cast** — it needs a cursor click a one-button rotation can't place.
-
----
-
-## ⚙️ Installation
-
-1. Download the `Aegis_SBR` folder.
-2. Place the folder directly into your World of Warcraft directory under: `Interface\AddOns\`
-   *(Ensure the folder name matches the `.toc` file exactly: `Interface\AddOns\Aegis_SBR\`)*
-3. Log into the game. Make sure "Load OutofDate AddOns" is checked if prompted.
-
-> **Note:** The `Aegis_SBR` folder includes an `Icons\` subfolder (the UI skin's bundled textures — switches, sliders, buttons, pills, and section cards) and a `Fonts\` subfolder (the UI skin's typeface, *PT Sans Narrow*, OFL-licensed — `Fonts\OFL.txt`). Keep both intact — if you copy files by hand, make sure `Icons\` and `Fonts\` come along. If `Fonts\` is missing the window falls back to the client's default font.
->
-> **First install / after an update that adds textures:** the 1.12 client only scans for new texture files at login, so do a **full relog** (log out to character select and back in) rather than just `/reload` — otherwise custom art may not appear.
-
-> **Upgrading from AutoRota (pre-0.14.0)?** The addon folder is now `Aegis_SBR` — remove the old `Interface\AddOns\AutoRota\` folder so both never load at once. Your per-character profiles migrate automatically on first login (`AutoRotaDB` → `AegisDB`, with the old data kept as a rollback backup for a few versions). **Back up your `WTF\` folder before the first login on 0.14.0.** If your profiles don't appear: log fully out and copy your character's old saved-variables file — `WTF\Account\<ACCOUNT>\<Realm>\<Character>\SavedVariables\AutoRota.lua` → `Aegis_SBR.lua` in the same folder (clients that keep per-character variables in one combined `SavedVariables.lua` won't need this) — then log back in. `/sbr` is the new primary command (also `/aegis`); `/ar` keeps working as a legacy alias for now.
-
-### ⚠️ Required
-* :crystal_ball: **`SuperWoW`**
-  Unlocks advanced client capabilities and expanded Lua functionality for modern addons.
-  ↳ [SuperWoW Release](https://github.com/balakethelock/SuperWoW/releases/tag/Release) | [Features Wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) | [SuperAPI Addon](https://github.com/balakethelock/SuperAPI)
-
-* :zap: **`NamPower (v4.6.1)`**
-  Handles text enhancement and native spell-queuing for smoother combat rotations.
-  ↳ [Nampower Release](https://gitea.com/avitasia/nampower/releases/tag/v4.6.1) | [Nampower Addon](https://gitea.com/avitasia/nampowersettings)
-
-* 🔋 **`UnitXP_SP3 (v89 Stable)`**
-  UnitXP Service Pack 3 Allows custom addons to accurately detect if players or enemies are in your line of sight or out of range.
-  ↳ [UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3/releases)
-
-* 🏗️ **`SuperCleveRoid Macros`**
-  Enhanced macro addon for World of Warcraft 1.12.1 (Vanilla/Turtle WoW) with dynamic tooltips, conditional execution, and extended syntax.
-  ↳ [SuperCleveRoidMacros](https://github.com/jrc13245/SuperCleveRoidMacros) | [SuperCleveRoid Macro Wiki](https://github.com/jrc13245/SuperCleveRoidMacros/wiki)
+> **Verification note:** Turtle's custom spells were confirmed by exact name against the client spell DB (*Icicles*, *Arcane Rupture*, *Arcane Surge*, *Flash Freeze*, *Fire Vulnerability*), but their **proc / stack behaviour is best-effort** — confirm with `/sbr debug` if something isn't firing. **Ground-targeted AoE (*Blizzard*, *Flamestrike*) is not auto-cast** — it needs a cursor click a one-button rotation can't place.
+</details>
 
 ---
 
-## Commands & Usage
+## Commands
 
-Aegis is designed to be mapped directly to a spammable macro on your action bar.
+The primary command is `/sbr` (long form `/aegis`); `/ar` still works everywhere as a legacy
+alias from the AutoRota era, so old macros keep functioning.
 
-### The Combat Macro
+### Everyone
 
-## ⚔️ The Ultimate Combat Macro
-Because all configuration logic is handled by the visual interface and database, your in-game macro is now completely streamlined down to a single line:
-```macro
-/sbr
+| Command | What it does |
+|---|---|
+| `/sbr` | Fire the rotation (your one button) |
+| `/sbr ui` | Open the configuration window |
+| `/sbr list` | List your saved profiles |
+| `/sbr use <name>` | Switch to a profile |
+| `/sbr new <name> [template]` | Create a profile from a class template |
+| `/sbr del <name>` | Delete a profile |
+| `/sbr off` | Stop running any profile |
+| `/sbr check` | Report whether the active profile suits your learned spells |
+| `/sbr reset` | Reseed profiles from the class templates |
+| `/sbr acquire on\|off\|assist <name>` | Targeting mode — auto / manual / mirror an ally's target by GUID |
+| `/sbrmap` or `/sbr minimap` | Show/hide the minimap button |
+| `/sbr debug` | Dump target debuffs and your buffs (names, stacks, textures) |
+| `/sbr talents` | Dump every talent and its rank, to confirm exact talent names |
+| `/sbr trace` | Toggle the per-press rotation log |
+
+### Per class
+
+| Command | Class | What it does |
+|---|---|---|
+| `/sbr mode <…>` | Hunter · Shaman · Mage | Playstyle/spec — `auto/ranged/melee` · `enhancement/elemental/tank/resto` · `frost/fire/arcane` |
+| `/sbr aoe` | Warrior · Paladin · Druid · Hunter · Mage | Toggle AoE mode |
+| `/sbr spell <alias> <on/off>` | Warrior · Hunter | Flip one ability on the active profile (Paladin: `/sbr spell <profile> <alias> <on/off>`) |
+| `/sbr cd <on/elite/off>` | Warrior · Hunter | Cooldown usage mode |
+| `/sbr heal <on/off>` | Paladin · Priest | Toggle heal mode |
+| `/sbr healat <1-100>` | Paladin · Priest | Heal group members below this % health |
+| `/sbr healpower <n>` | Paladin · Priest | Manual +healing override for downranking (0 = auto from gear) |
+| `/sbr weave <on/off>` | Druid · Shaman (resto) | Weave damage between heals during downtime |
+| `/sbr seal <profile> <debuff/damage> <alias>` | Paladin | Set a seal slot |
+| `/sbr strike <off/hs/cs/auto/tank>` | Paladin | Set which strikes are used |
+| `/sbr hsat <1-100>` | Paladin | Health % for the *Holy Shock* emergency heal |
+| `/sbr flashat <1-100>` | Priest | Health % for the *Flash Heal* emergency |
+| `/sbr filler <wand/flay/smite>` | Priest | DPS filler choice |
+| `/sbr cp <1-5>` | Rogue | Minimum combo points before finishing |
+| `/sbr curse <alias>` | Warlock | Switch the curse (`coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`) |
+| `/sbr sting <alias>` | Hunter | Maintained sting (`serpent`/`scorpid`/`viper`/`none`) |
+| `/sbr style <bleed/shred>` | Druid | Cat style |
+| `/sbr form <cat/bear/caster/resto>` | Druid | Preferred form/spec |
+| `/sbr dance` | Warrior | Toggle experimental stance dancing |
+| `/sbr wandhp <0-100>` | Mage | Target-health % to finish with the wand |
+
+<details>
+<summary><b>Ability aliases</b> for <code>/sbr spell</code>, seals, stings and curses</summary>
+
+**Warrior** — `ms`/`mortalstrike`, `bt`/`bloodthirst`, `ss`/`shieldslam`, `ww`/`whirlwind`,
+`slam`, `op`/`overpower`, `rev`/`revenge`, `exec`/`execute`, `sa`/`sunder`,
+`tc`/`thunderclap`, `hs`/`heroicstrike`, `cleave`, `sweep`/`sweeping`, `dw`/`deathwish`,
+`reck`/`recklessness`, `br`/`berserkerrage`, `bld`/`bloodrage`, `sb`/`shieldblock`,
+`charge`, `rend`, `bshout`/`battleshout`, `demo`/`demoshout`, `mstrike`/`masterstrike`
+
+**Hunter** — `mark`/`hm`, `steady`/`st`, `arcane`/`as`, `multi`/`ms`, `aimed`/`aim`,
+`volley`, `trap`/`immolation`, `raptor`/`rs`, `mongoose`/`mb`, `lac`/`lacerate`, `carve`,
+`wc`/`wingclip`, `aspect`, `kc`/`killcommand`, `baited`, `mend`
+
+**Paladin seals** — `sotc`/`crusader`, `sor`/`righteousness`, `soc`/`command`,
+`sow`/`wisdom`, `sol`/`light`, `none`
+
+**Hunter stings** — `ss`/`serpent`, `sco`/`scorpid`, `vs`/`viper`, `none`
+
+**Warlock curses** — `coa`, `coe`, `cos`, `cow`, `cor`, `cot`, `cod`, `none`
+</details>
+
+---
+
+## A few honest notes
+
+- **The priorities are hand-tuned, and audited in the open.** `docs/rotations.md` holds the
+  researched Turtle 1.18.1 priority for every spec, and
+  `docs/audit-phase1-rotations.md` is a per-class report of **where the code and that
+  research disagree** — each with a recommendation and the risk of changing it. Nothing is
+  quietly "fixed" on paper; changes get tested.
+- **Some Turtle spell and proc names are best-effort.** Turtle adds and renames things, and
+  a talent's *buff* often has a different name than the talent. Everything is gated, so a
+  wrong name simply no-ops rather than erroring — if something never fires, `/sbr debug` and
+  `/sbr talents` show you the real strings.
+- **AoE is a manual toggle, deliberately.** The 1.12 client can't reliably count nearby
+  enemies, so `/sbr aoe` is a keybind rather than a guess.
+- **Ground-targeted spells aren't auto-cast** (Blizzard, Flamestrike, Hurricane). They need a
+  cursor placement a one-button rotation can't make for you.
+- **Mind the debuff cap.** Turtle enforces 32 buffs / 16 debuffs per unit. On raid bosses,
+  turn off low-value debuff upkeep (that's why *Shadow Word: Pain* and *Demoralizing Shout*
+  have toggles).
+- **Weapon imbues and poisons are pre-pull tools, not mid-fight upkeep.** Poisons can't be
+  applied in combat at all, and re-imbuing costs a global cooldown — so Aegis auto-applies
+  out of combat and *reminds* you in combat rather than hijacking your rotation.
+- **PvP and auto-defensives aren't here yet.** No Ice Block, Shield Wall, or Divine Shield
+  automation — that's a planned phase, not a shipped feature.
+
+---
+
+## Under the hood
+
+```
+Aegis_SBR/
+├── Aegis_SBR.lua           core engine: rotation entry, profiles, targeting,
+│                           shared helpers (spell index, buff/debuff snapshots,
+│                           swing timer, weapon enchants)
+├── Aegis_SBR_UI.lua        config window shell, flat-dark theme, layout
+│                           primitives (rows, dropdowns, sliders, spec tabs)
+├── Aegis_SBR_Minimap.lua   minimap button + addon options panel
+├── classes/                one rotation module + one config panel per class
+│   ├── Class_Warrior.lua      the priority list and its gates
+│   ├── Class_Warrior_UI.lua   that class's panel
+│   └── …                      ×9 classes
+├── Icons/                  flat-dark UI textures (TGA)
+├── Fonts/                  PT Sans Narrow (OFL)
+├── docs/                   rotation reference, Turtle mechanics, dependency
+│                           stack, roadmap, and the per-class rotation audit
+└── scripts/verify.py       Lua 5.0 static verifier
 ```
 
-> #### 🗡️ Melee classes: put **Attack** on an action bar
-> For melee classes (Paladin, Rogue, Warrior, and Druid in Cat/Bear form), Aegis keeps your white swing going by toggling the standard **Attack** ability — but it can only do this if that ability is on one of your action bars. Open your spellbook (**P**), find **Attack** in the *General* tab, and drag it onto any free action slot. Without it, the rotation will fire abilities but you may notice you are not auto-attacking between them.
->
-> **Druids, read this:** shapeshifting into Cat or Bear form **replaces your main action bar** with the form bar, so **Attack** must sit on a bar that stays visible while shifted — the right-side vertical bars or the bottom-right bar, **not** the main bar (slots 1–12). If it is only on the main bar, you will see the rotation taunt and use abilities but the white swing will not start in form.
->
-> *Exception:* if you run **SuperCleveRoidMacros**, Aegis leaves auto-attack handling to SCRM and skips this step.
+**One cast per press** is enforced by structure: each priority step returns immediately after
+it fires, so a press can never issue two casts and clip itself.
 
-> #### 🏹 Hunter: put **Auto Shot** on an action bar
-> Aegis keeps your **Auto Shot** firing between instants. It detects the shot most reliably when **Auto Shot** is on one of your action bars, so drag it there from your spellbook (**P** → *General* tab). If you enable the **melee weave** option, also place **Attack** on a bar so *Raptor Strike* has white swings to ride.
-
-## 🔨 Configuration & Settings
-To open the comprehensive configuration interface, manage profiles, adjust resource sliders, or toggle specific spells on or off, type:
-```macro
-/sbr ui
-```
----
-
-### Slash Command Line Interface (CLI)
-You can also change profile properties dynamically via chat or macros. The primary
-command is `/sbr` (long form `/aegis`); `/ar` still works everywhere as a legacy
-alias from the AutoRota era, so old macros keep functioning:
-
-| Command | Description | Example |
-| :--- | :--- | :--- |
-| `/sbr list` | Lists all saved configuration profiles. | `/sbr list` |
-| `/sbr use <name>` | Instantly switches to the specified profile. | `/sbr use Leveling` |
-| `/sbr off` | Pauses/disables rotation execution. | `/sbr off` |
-| `/sbr new <name> [template]` | Creates a new profile from a class template. | `/sbr new Raid fury` |
-| `/sbr del <name>` | Deletes a saved profile. | `/sbr del Raid` |
-| `/sbr check` | Reports whether the active profile is valid for your learned spells. | `/sbr check` |
-| `/sbr reset` | Reseeds the profile list from the class templates and deactivates. | `/sbr reset` |
-| `/sbr debug` | Dumps target debuffs (name / stacks / texture) and your player buffs. | `/sbr debug` |
-| `/sbr talents` | Dumps every talent tab and talent with its current rank (ranked ones highlighted), to confirm exact talent names. | `/sbr talents` |
-| `/sbr trace` | Toggles detailed combat logic debugging. | `/sbr trace` |
-| `/sbr acquire on\|off\|assist <name>` | Global targeting mode (also on the minimap right-click panel): `on` auto-acquires the nearest enemy when you have none, `off` defers entirely to you or an assist addon, `assist <name>` continuously mirrors that party/raid member's target by GUID. | `/sbr acquire assist Taxor` |
-| `/sbrmap` or `/sbr minimap` | Hides or shows the minimap button. Right-click the button for the options panel. | `/sbr minimap` |
-| `/sbr cp <1-5>` | *(Rogue Only)* Sets min. finishing Combo Points. | `/sbr cp 5` |
-| `/sbr seal <profile> <debuff/damage> <alias>` | *(Paladin Only)* Sets a seal slot on the named profile. | `/sbr seal DPS damage sor` |
-| `/sbr strike <what>` | *(Paladin Only)* Sets strikes (`off`/`hs`/`cs`/`auto`/`tank`). | `/sbr strike hs` |
-| `/sbr heal <on/off>` | *(Paladin & Priest)* Toggles heal mode (group healer that weaves damage between heals; works at range). | `/sbr heal on` |
-| `/sbr healat <1-100>` | *(Paladin & Priest)* Heals group members below this % health. | `/sbr healat 85` |
-| `/sbr hsat <1-100>` | *(Paladin Only)* Health % under which *Holy Shock* is used as an instant emergency heal. | `/sbr hsat 50` |
-| `/sbr flashat <1-100>` | *(Priest Only)* Health % under which *Flash Heal* is allowed as an emergency heal. | `/sbr flashat 40` |
-| `/sbr filler <wand/flay/smite>` | *(Priest Only)* Sets the DPS filler — wand conserves mana (the 5-second rule); Mind Flay / Smite spend it. | `/sbr filler wand` |
-| `/sbr healpower <n>` | *(Paladin & Priest)* Manual +healing override for downranking (0 = auto-read from gear). | `/sbr healpower 0` |
-| `/sbr curse <alias>` | *(Warlock Only)* Switches the curse on the active profile. | `/sbr curse coe` |
-| `/sbr mode <…>` | *(Hunter, Shaman & Mage)* Switches playstyle/spec — Hunter: `auto/ranged/melee`, Shaman: `enhancement/elemental/tank/resto`, Mage: `frost/fire/arcane`. | `/sbr mode frost` |
-| `/sbr sting <alias>` | *(Hunter Only)* Sets the maintained sting (`serpent`/`scorpid`/`viper`/`none`). | `/sbr sting serpent` |
-| `/sbr style <bleed/shred>` | *(Druid Only)* Switches the cat style mid-fight. | `/sbr style shred` |
-| `/sbr form <cat/bear/caster/resto>` | *(Druid Only)* Sets the preferred form/spec (caster = Balance/Moonkin, resto = group healer). | `/sbr form resto` |
-| `/sbr weave <on/off>` | *(Druid & Shaman, resto only)* Weave damage between heals during downtime — trades mana for DPS when nobody needs healing. | `/sbr weave on` |
-| `/sbr aoe` | *(Warrior, Paladin, Druid, Hunter & Mage)* Toggles AoE mode (Cleave + Whirlwind / Consecration / Swipe / Volley + Multi-Shot / Frost Nova + Cone of Cold + Arcane Explosion). | `/sbr aoe` |
-| `/sbr wandhp <0-100>` | *(Mage Only)* Target-health % under which the rotation finishes the mob with the wand (0 = off, cast to death). | `/sbr wandhp 40` |
-| `/sbr cd <on/elite/off>` | *(Warrior & Hunter)* Sets cooldown usage mode. | `/sbr cd elite` |
-| `/sbr dance` | *(Warrior Only)* Toggles experimental stance dancing. | `/sbr dance` |
-| `/sbr spell <alias> <on/off>` | *(Warrior & Hunter)* Flips an ability on the active profile. Paladin uses `/sbr spell <profile> <alias> <on/off>`. | `/sbr spell ms on` |
-
-### Paladin Seal Aliases
-When using the /sbr seal command, you can use short aliases:
-
-  * `sotc` / `crusader` → `Seal of the Crusader`
-  * `sor` / `righteousness` → `Seal of Righteousness`
-  * `soc` / `command` → `Seal of Command`
-  * `sow` / `wisdom` → `Seal of Wisdom`
-  * `sol` / `light` → `Seal of Light`
-  * `none` → `Clears slot`
-
-# Combat Utility Macros:
-
-## Paladin Combat Toggles:
-
-You can maintain a single spammable combat macro while using separate keybinds to hot-swap seals during an encounter:
-
-  * `/sbr seal <profile> debuff <alias>` : Updates your current rotation debuff mid-fight.
-
-  * `/sbr seal <profile> damage <alias>` : Updates your current rotation damage seal mid-fight.
-
-  * `/sbr strike <what>` : Switches strikes on the active profile mid-fight — `off`, `hs` (Holy only), `cs` (Crusader only), `auto` (both, Auto DPS), or `tank` (both, Tank block). Handy for binding a tank/leveling style to a key.
-
-## Warrior Combat Toggles:
-
-The Warrior module adds quick toggles you can bind to separate keys to adjust the rotation mid-fight without opening the panel:
-
-  * `/sbr aoe` : Toggles AoE mode (rage dump becomes *Cleave*, *Whirlwind* used on cooldown).
-
-  * `/sbr cd on|elite|off` : Sets cooldown usage to always, Elite/Boss only, or fully manual.
-
-  * `/sbr dance` : Toggles experimental stance dancing for *Overpower*.
-
-  * `/sbr spell <alias> on|off` : Flips an individual ability on the active profile (e.g., `/sbr spell bt off`).
-
-### Warrior Spell Aliases
-When using the /sbr spell command, you can use short aliases:
-
-  * `ms` / `mortalstrike` → `Mortal Strike`
-  * `bt` / `bloodthirst` → `Bloodthirst`
-  * `ss` / `shieldslam` → `Shield Slam`
-  * `ww` / `whirlwind` → `Whirlwind`, `slam` → `Slam`
-  * `op` / `overpower` → `Overpower`, `rev` / `revenge` → `Revenge`, `exec` / `execute` → `Execute`
-  * `sa` / `sunder` → `Sunder Armor`, `tc` / `thunderclap` → `Thunder Clap`
-  * `hs` / `heroicstrike` → `Heroic Strike`, `cleave` → `Cleave`, `sweep` / `sweeping` → `Sweeping Strikes`
-  * `dw` / `deathwish` → `Death Wish`, `reck` / `recklessness` → `Recklessness`, `br` / `berserkerrage` → `Berserker Rage`
-  * `bld` / `bloodrage` → `Bloodrage`, `sb` / `shieldblock` → `Shield Block`
-  * `charge` → `Charge` (leveling opener), `rend` → `Rend` (leveling bleed)
-  * `battleshout` / `bshout` → `Battle Shout`, `demoshout` / `demo` → `Demoralizing Shout`
-  * `masterstrike` / `mstrike` → `Master Strike` (Arms talent, opt-in)
-
-## Hunter Combat Toggles:
-
-The Hunter module adds quick toggles you can bind to separate keys to adjust the rotation mid-fight without opening the panel:
-
-  * `/sbr mode auto|ranged|melee` : Switches the hunter playstyle. Auto picks ranged vs melee by distance to the target; ranged = BM/MM, melee = Survival/BM.
-
-  * `/sbr sting serpent|scorpid|viper|none` : Switches the maintained sting on the active profile.
-
-  * `/sbr aoe` : Toggles AoE mode (*Volley* leads, then *Multi-Shot* fills).
-
-  * `/sbr cd on|elite|off` : Sets cooldown usage (*Rapid Fire*, *Bestial Wrath*) to always, Elite/Boss only, or fully manual.
-
-  * `/sbr spell <alias> on|off` : Flips an individual ability on the active profile (e.g., `/sbr spell aimed on`).
-
-### Hunter Spell Aliases
-When using the /sbr spell command, you can use short aliases:
-
-  * `mark` / `hm` → *Hunter's Mark*, `steady` / `st` → *Steady Shot*
-  * `arcane` / `as` → *Arcane Shot*, `multi` / `ms` → *Multi-Shot*, `aimed` / `aim` → *Aimed Shot*
-  * `volley` → *Volley*, `immolation` / `trap` → *Immolation Trap*
-  * `raptor` / `rs` → *Raptor Strike*, `mongoose` / `mb` → *Mongoose Bite*, `lacerate` / `lac` → *Lacerate*, `carve` → *Carve*, `wingclip` / `wc` → *Wing Clip*
-  * `aspect` → keep combat aspect up, `killcommand` / `kc` → *Kill Command*, `baited` → *Baited Shot*, `mend` → *Mend Pet*
-
-### Hunter Sting Aliases
-When using the /sbr sting command, you can use short aliases:
-
-  * `serpent` / `ss` → `Serpent Sting`
-  * `scorpid` / `sco` → `Scorpid Sting`
-  * `vs` / `viper` → `Viper Sting`
-  * `none` → `Clears slot`
+**Everything is Lua 5.0 and 1.12 API only** — no `string.match`, no `#`, no `%` operator, no
+secure hooks, and every file must load top-to-bottom in one pass. `scripts/verify.py` checks
+bracket balance and define-before-use ordering across the addon; it runs after every change,
+because these break at *runtime*, not at load. [`CLAUDE.md`](CLAUDE.md) has the full ruleset
+and the reasoning behind each rule.
 
 ---
 
-## 🚩 Troubleshooting & False Positives
-MacroErrorChecker / UI Warning Messages
-If you use macro validation addons like MacroErrorChecker, you may see a warning in chat on login stating: L3: Unknown command: /sbr.
+## Something broken?
 
-This is a false positive. External macro checkers look for a static list of default Blizzard interface commands. They cannot scan third-party custom slash engines. As long as typing /sbr ui opens your addon profile window, Aegis is working perfectly and you can safely ignore or disable the validation warning. This can be added to the whitelist with some addons like `SuperCleveRoidMacros` to avoid the chat error.
+1. Check the **version** — it's on the config window header and in the `.toc`. Quote it.
+2. Run **`/sbr debug`** (live buff/debuff names) and **`/sbr trace`** (per-press decisions).
+   Between them, most "why won't it cast X" questions answer themselves.
+3. Tell us on **[Discord](https://discord.gg/3wTfRU8V9Z)** or open an
+   [issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots help enormously,
+   especially for anything layout-related.
 
-### My character casts abilities but doesn't auto-attack
-On a melee class, Aegis starts your white swing by toggling the standard **Attack** ability, which it locates by scanning your action bars. If **Attack** is not on any bar, there is nothing for it to toggle and you will fire abilities without swinging in between. Drag **Attack** from your spellbook (**P** → *General* tab) onto any action slot. (If you use **SuperCleveRoidMacros**, it manages attacks instead and Aegis leaves this alone.)
+<details>
+<summary><b>"Unknown command: /sbr"</b> from MacroErrorChecker and friends</summary>
+
+That's a false positive. Macro validation addons check against a static list of Blizzard's
+built-in slash commands and can't see third-party slash engines. If `/sbr ui` opens the
+window, everything is working — ignore the warning, or whitelist the command (SCRM supports
+this).
+</details>
+
+<details>
+<summary><b>My character uses abilities but doesn't auto-attack</b></summary>
+
+On a melee class, Aegis starts your white swing by toggling the standard **Attack** ability,
+which it finds by scanning your action bars. If **Attack** isn't on any bar, there's nothing
+to toggle. Drag it from your spellbook (**P** → *General*) onto any slot — and for Druids,
+onto a bar that survives shapeshifting. (With **SuperCleveRoidMacros** installed, it manages
+attacks instead and Aegis stays out of the way.)
+</details>
 
 ---
 
-## 🔗 Links & Community
+## Contributing
 
-- 📦 **Source / Releases:** [github.com/Torchlite-bit/Aegis_SBR](https://github.com/Torchlite-bit/Aegis_SBR) — grab the latest version, read the [changelog](CHANGELOG.md), or open an issue if something misbehaves.
-- 🐛 **Bug reports & feature requests:** [open an issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots plus the output of `/sbr debug` (and `/sbr trace` for rotation problems) make a report far easier to act on.
-- 💬 **Discord:** [discord.gg/3wTfRU8V9Z](https://discord.gg/3wTfRU8V9Z) — questions, bug reports, and rotation feedback.
-- 📖 **In-repo documentation** (`docs/`): rotation reference, Turtle mechanics, the dependency stack, the phased roadmap, and the per-class rotation audit.
+PRs welcome — come say hi on **[Discord](https://discord.gg/3wTfRU8V9Z)** first if you're
+planning something big.
+
+Four requests:
+
+1. Keep inside the 1.12 / Lua 5.0 rules in [`CLAUDE.md`](CLAUDE.md) — they're there because
+   breaking them fails at *runtime*, not at load.
+2. Run `python3 scripts/verify.py --all` before you push. It must pass.
+3. **Don't change a rotation priority without saying why.** The per-class lists are
+   hand-tuned; if research disagrees with the code, that belongs in
+   `docs/audit-phase1-rotations.md` as a discussion, not a silent edit.
+4. Bump the version in **all three** spots (`.toc`, `ver` in `Aegis_SBR.lua`, the README
+   version badge) and add a line to [`CHANGELOG.md`](CHANGELOG.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**[💬 Discord](https://discord.gg/3wTfRU8V9Z)** · **[📜 Changelog](CHANGELOG.md)** · **[🐛 Issues](https://github.com/Torchlite-bit/Aegis_SBR/issues)**
+
+*Aegis: Single Button Rotation is part of the Aegis addon series. One key. Go fight something.* ⚔️
+
+</div>
