@@ -1,12 +1,9 @@
-# Aegis: Single Button Rotation
+# Aegis: Single Button Rotation ⚔️ (v0.15.5)
+[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Hr66t25vE7)
+[![Client](https://img.shields.io/badge/client-WoW%201.12%20(vanilla)-c79c6e?style=flat-square)](https://turtle-wow.org)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 **One button. Your whole rotation.**
-
-[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/3wTfRU8V9Z)
-[![Client](https://img.shields.io/badge/client-WoW%201.12%20(vanilla)-c79c6e?style=flat-square)](https://turtle-wow.org)
-[![Classes](https://img.shields.io/badge/classes-9%2F9-a335ee?style=flat-square)](#class-modules)
-[![Version](https://img.shields.io/badge/version-0.15.5-1eff00?style=flat-square)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 A 1.12 rotation is a lot of buttons and a lot of bookkeeping — which debuff fell off, is
 the proc up, do I have rage for that. Aegis puts the whole thing on **one key**. Every
@@ -519,4 +516,7 @@ MIT — see [LICENSE](LICENSE).
 
 *Aegis: Single Button Rotation is part of the Aegis addon series. One key. Go fight something.* ⚔️
 
-</div>
+- 📦 **Source / Releases:** [github.com/Torchlite-bit/Aegis_SBR](https://github.com/Torchlite-bit/Aegis_SBR) — grab the latest version, read the [changelog](CHANGELOG.md), or open an issue if something misbehaves.
+- 🐛 **Bug reports & feature requests:** [open an issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots plus the output of `/sbr debug` (and `/sbr trace` for rotation problems) make a report far easier to act on.
+- 💬 **Discord:** [discord.gg/3wTfRU8V9Z](https://discord.gg/Hr66t25vE7) — questions, bug reports, and rotation feedback.
+- 📖 **In-repo documentation** (`docs/`): rotation reference, Turtle mechanics, the dependency stack, the phased roadmap, and the per-class rotation audit.
