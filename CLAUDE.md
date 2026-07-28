@@ -129,7 +129,8 @@ Current version: **0.15.0**.
    Roll multi-file conversions (e.g. all class panels) in small batches, not all at once.
 4. **Version cut**: letter-suffix versioning (e.g. `0.13.12b` → `0.13.13b`; the rebrand
    itself is a natural cut, e.g. `0.14.0`). Bump the version in ALL canonical spots
-   (`.toc`, the core `.lua` `ver = "..."`, the README H1) and prepend a `CHANGELOG.md`
+   (`.toc`, the core `.lua` `ver = "..."`, the **README version badge** — the
+   `shields.io/badge/version-…` URL near the top) and prepend a `CHANGELOG.md`
    entry. Keep them in sync — grep to confirm no stale version strings remain.
 5. **Preserve `.toc` load order** — reordering files can break the single-pass loader.
 6. Prefer **minimal, surgical diffs**; match existing code style and naming exactly.
