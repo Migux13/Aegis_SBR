@@ -1,20 +1,31 @@
-# Aegis: Single Button Rotation ⚔️ (v0.15.5)
-[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Hr66t25vE7)
-[![Client](https://img.shields.io/badge/client-WoW%201.12%20(vanilla)-c79c6e?style=flat-square)](https://turtle-wow.org)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+# Aegis: Single Button Rotation
 
 **One button. Your whole rotation.**
+
+[![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/hsgPTNkSX)
+[![Octo WoW](https://img.shields.io/badge/Octo%20WoW-1.18.1-4c1?style=flat-square&labelColor=555)](https://octowow.st/)
+[![Capy WoW](https://img.shields.io/badge/Capy%20WoW-1.18.1-4c1?style=flat-square&labelColor=555)](https://capycraft.io/)
+[![Version](https://img.shields.io/badge/version-0.15.5-1eff00?style=flat-square&labelColor=555)](CHANGELOG.md)
+[![Classes](https://img.shields.io/badge/classes-9%2F9-a335ee?style=flat-square&labelColor=555)](#class-modules)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square&labelColor=555)](LICENSE)
+
+[![SuperWoW](https://img.shields.io/badge/SuperWoW-Required-8A2BE2?style=flat-square&labelColor=555)](https://github.com/balakethelock/SuperWoW)
+[![Nampower](https://img.shields.io/badge/Nampower-Required-8A2BE2?style=flat-square&labelColor=555)](https://github.com/brues-code/nampower)
+[![UnitXP_SP3](https://img.shields.io/badge/UnitXP__SP3-Required-8A2BE2?style=flat-square&labelColor=555)](https://codeberg.org/konaka/UnitXP_SP3)
+[![ClassicAPI](https://img.shields.io/badge/ClassicAPI-Recommended-dfb317?style=flat-square&labelColor=555)](https://github.com/brues-code/ClassicAPI)
+[![SCRM](https://img.shields.io/badge/SCRM-Recommended-dfb317?style=flat-square&labelColor=555)](https://github.com/brues-code/SuperCleveRoidMacros)
 
 A 1.12 rotation is a lot of buttons and a lot of bookkeeping — which debuff fell off, is
 the proc up, do I have rage for that. Aegis puts the whole thing on **one key**. Every
 press evaluates your class, spec, resources, procs, and debuff windows, then fires the
 single best ability for that instant. No macro spaghetti, no clipping the global cooldown.
 
-> Built for **Turtle WoW 1.18.1**, which runs the original **WoW 1.12 (vanilla)** client on
-> **Lua 5.0**. Not Classic. Not retail. Real vanilla — with Turtle's custom class changes
+> Built for the **1.18.1** vanilla-plus servers — [Octo WoW](https://octowow.st/) and
+> [Capy WoW](https://capycraft.io/) — which run the original **WoW 1.12 (vanilla)** client on
+> **Lua 5.0**. Not Classic. Not retail. Real vanilla, with 1.18.1's custom class changes
 > baked in.
 
-**[💬 Join the Discord](https://discord.gg/3wTfRU8V9Z)** for help, bug reports, and rotation
+**[💬 Join the Discord](https://discord.gg/hsgPTNkSX)** for help, bug reports, and rotation
 feedback.
 
 > ⚠️ **Active beta.** Rotation logic and general functionality can still have rough edges.
@@ -86,12 +97,13 @@ global cooldown mid-fight unless you say so.
 Aegis is built directly on these. SuperWoW in particular is not optional — cast detection,
 GUID targeting, and spell-ID debuff resolution all come from it.
 
-| Mod | Why Aegis needs it |
-|---|---|
-| **[SuperWoW](https://github.com/balakethelock/SuperWoW/releases/tag/Release)** | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
-| **[Nampower](https://gitea.com/avitasia/nampower/releases)** | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. ↳ [settings addon](https://gitea.com/avitasia/nampowersettings) |
-| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3/releases)** | Accurate distance and line-of-sight checks. |
-| **[SuperCleveRoidMacros](https://github.com/jrc13245/SuperCleveRoidMacros)** | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. ↳ [wiki](https://github.com/jrc13245/SuperCleveRoidMacros/wiki) |
+| Mod | | Why |
+|---|---|---|
+| **[SuperWoW](https://github.com/balakethelock/SuperWoW)** | Required | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
+| **[Nampower](https://github.com/brues-code/nampower)** | Required | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. |
+| **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | The client API layer the current 1.18.1 addon stack is built on. |
+| **[SuperCleveRoidMacros](https://github.com/brues-code/SuperCleveRoidMacros)** | Recommended | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. |
 
 ---
 
@@ -463,7 +475,7 @@ and the reasoning behind each rule.
 1. Check the **version** — it's on the config window header and in the `.toc`. Quote it.
 2. Run **`/sbr debug`** (live buff/debuff names) and **`/sbr trace`** (per-press decisions).
    Between them, most "why won't it cast X" questions answer themselves.
-3. Tell us on **[Discord](https://discord.gg/3wTfRU8V9Z)** or open an
+3. Tell us on **[Discord](https://discord.gg/hsgPTNkSX)** or open an
    [issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots help enormously,
    especially for anything layout-related.
 
@@ -490,7 +502,7 @@ attacks instead and Aegis stays out of the way.)
 
 ## Contributing
 
-PRs welcome — come say hi on **[Discord](https://discord.gg/3wTfRU8V9Z)** first if you're
+PRs welcome — come say hi on **[Discord](https://discord.gg/hsgPTNkSX)** first if you're
 planning something big.
 
 Four requests:
@@ -512,11 +524,8 @@ MIT — see [LICENSE](LICENSE).
 
 <div align="center">
 
-**[💬 Discord](https://discord.gg/3wTfRU8V9Z)** · **[📜 Changelog](CHANGELOG.md)** · **[🐛 Issues](https://github.com/Torchlite-bit/Aegis_SBR/issues)**
+**[💬 Discord](https://discord.gg/hsgPTNkSX)** · **[📜 Changelog](CHANGELOG.md)** · **[🐛 Issues](https://github.com/Torchlite-bit/Aegis_SBR/issues)**
 
 *Aegis: Single Button Rotation is part of the Aegis addon series. One key. Go fight something.* ⚔️
 
-- 📦 **Source / Releases:** [github.com/Torchlite-bit/Aegis_SBR](https://github.com/Torchlite-bit/Aegis_SBR) — grab the latest version, read the [changelog](CHANGELOG.md), or open an issue if something misbehaves.
-- 🐛 **Bug reports & feature requests:** [open an issue](https://github.com/Torchlite-bit/Aegis_SBR/issues). Screenshots plus the output of `/sbr debug` (and `/sbr trace` for rotation problems) make a report far easier to act on.
-- 💬 **Discord:** [discord.gg/3wTfRU8V9Z](https://discord.gg/Hr66t25vE7) — questions, bug reports, and rotation feedback.
-- 📖 **In-repo documentation** (`docs/`): rotation reference, Turtle mechanics, the dependency stack, the phased roadmap, and the per-class rotation audit.
+</div>
