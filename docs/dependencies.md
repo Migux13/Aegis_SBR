@@ -176,6 +176,31 @@ suspect queue timing first.
 
 ---
 
+## 2b. ClassicAPI  (brues-code/ClassicAPI) — RECOMMENDED, not required
+A compiled **1.12.1 DLL that backports the modern Blizzard API** (250+ functions across
+`C_Timer`, `C_Spell`, `C_Item`, `C_Container`, `C_UnitAuras`, `C_EncodingUtil`, …, plus
+`frame:HookScript`). Loaded via VanillaFixes; 32-bit Windows only; GPLv3.
+
+**Aegis does not use it yet.** It sits in the *Recommended* tier, so nothing may depend on
+it unconditionally — and note `CLAUDE.md` currently **bans `C_*` namespaces** outright, a
+rule written before this DLL existed. Adopting any of it requires that rule to be amended to
+a presence-gated carve-out first.
+
+**It does NOT change the Lua version** — still 5.0, so every hard constraint stands
+(`table.getn`, `math.mod`, no `string.match`).
+
+Where it could actually help (ranked, with the caveats): **enemy debuff durations**
+(`C_UnitAuras`) — the one capability the Required stack genuinely lacks; **exact spell range**
+(`C_Spell.IsSpellInRange`) vs today's `CheckInteractDistance` ~10yd proxy; **deferred
+callbacks** (`C_Timer`); and **`C_EncodingUtil`** for roadmap Phase 3's profile
+import/export. Do **not** move `UnitGUID`, `SpellInfo`, or line-of-sight onto it — those
+already come from Required dependencies (SuperWoW / UnitXP_SP3).
+
+⚠️ The repo documents function *names*, not return signatures — verify shapes in-game before
+building. **Full analysis + the in-game verification block: `docs/research-classicapi.md`.**
+
+---
+
 ## 3. SuperCleveRoidMacros  (jrc13245/SuperCleveRoidMacros)
 Enhanced macro engine for 1.12.1 (Vanilla/Turtle): conditional execution, dynamic
 tooltips/icons, extended `/cast` syntax, count-based AoE conditionals, soft-target scanning.
