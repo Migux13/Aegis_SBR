@@ -79,9 +79,8 @@ the `AegisUI_*` prefix.)
 - **Textures**: power-of-two TGA, referenced without extension, double backslashes; new/
   renamed textures need a full relog.
 - **Versioning**: `0.14.0` and up (letter-suffix `0.13.xb` was the pre-rebrand scheme); bump
-  `.toc` + core `.lua` `ver` + the **README version badge** (the `shields.io/badge/version-…`
-  URL near the top of `README.md`) together and prepend a `CHANGELOG.md` entry; grep to
-  confirm no stale version strings.
+  `.toc` + core `.lua` `ver` together and prepend a `CHANGELOG.md` entry; grep to confirm no
+  stale version strings. The README deliberately carries **no** version string.
 - **Profiles**: `NormalizeProfile` fills MISSING keys only (never clobbers user values) — so
   adding a config field is backward-safe. Templates per spec provide sensible defaults.
 

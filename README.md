@@ -5,9 +5,6 @@
 [![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/hsgPTNkSX)
 [![Octo WoW](https://img.shields.io/badge/Octo%20WoW-1.18.1-4c1?style=flat-square&labelColor=555)](https://octowow.st/)
 [![Capy WoW](https://img.shields.io/badge/Capy%20WoW-1.18.1-4c1?style=flat-square&labelColor=555)](https://capycraft.io/)
-[![Version](https://img.shields.io/badge/version-0.15.5-1eff00?style=flat-square&labelColor=555)](CHANGELOG.md)
-[![Classes](https://img.shields.io/badge/classes-9%2F9-a335ee?style=flat-square&labelColor=555)](#class-modules)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square&labelColor=555)](LICENSE)
 
 [![SuperWoW](https://img.shields.io/badge/SuperWoW-Required-8A2BE2?style=flat-square&labelColor=555)](https://github.com/balakethelock/SuperWoW)
 [![Nampower](https://img.shields.io/badge/Nampower-Required-8A2BE2?style=flat-square&labelColor=555)](https://github.com/brues-code/nampower)
