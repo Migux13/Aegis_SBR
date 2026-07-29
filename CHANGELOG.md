@@ -19,7 +19,7 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
   single number in `Class_Warrior.lua` is the tuning knob; report the tooltip cost and it can
   be set exactly. It is likewise not stance-gated, since the stance rule is unverified.*
 - **README refresh:** a new **Links & Community** section (source/releases, issue tracker,
-  the [Discord](https://discord.gg/3wTfRU8V9Z), in-repo docs), a Key Features entry for the opt-in
+  the [Discord](https://discord.gg/hsgPTNkSX), in-repo docs), a Key Features entry for the opt-in
   weapon-enchant awareness (Shaman imbue upkeep + Rogue poison reminder), the Hunter aspect
   section rewritten for the two independent Viper/combat thresholds, the new Warrior Master
   Strike bullet, and the shout + Master Strike spell aliases added to the Warrior alias list.
