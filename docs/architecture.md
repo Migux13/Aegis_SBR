@@ -78,9 +78,10 @@ the `AegisUI_*` prefix.)
 - **Comments explain WHY.** Match the existing flat-dark palette and naming.
 - **Textures**: power-of-two TGA, referenced without extension, double backslashes; new/
   renamed textures need a full relog.
-- **Versioning**: `0.14.0` and up (letter-suffix `0.13.xb` was the pre-rebrand scheme); bump
-  `.toc` + core `.lua` `ver` together and prepend a `CHANGELOG.md` entry; grep to confirm no
-  stale version strings. The README deliberately carries **no** version string.
+- **Versioning**: `1.1.0` and up as of the release cut (ran `0.14.0`–`0.16.2` post-rebrand;
+  letter-suffix `0.13.xb` was the pre-rebrand scheme); bump `.toc` + core `.lua` `ver` + the
+  **README H1** together and prepend a `CHANGELOG.md` entry; grep to confirm no stale
+  version strings remain.
 - **Profiles**: `NormalizeProfile` fills MISSING keys only (never clobbers user values) — so
   adding a config field is backward-safe. Templates per spec provide sensible defaults.
 
