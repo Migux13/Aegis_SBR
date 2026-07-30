@@ -50,12 +50,18 @@ addon root as `logo.tga` and do a **full relog** to see it.
 
 All 9 class panels use a unified single-row config layout; all four healer specs have
 config panels; a Shaman totem system maintains totems across every spec via SuperWoW's
-`UNIT_CASTEVENT`. **Phase 2 has begun (v0.15.0):** a shared weapon-enchant detection
-helper (`Aegis_SBR:WeaponEnchant`/`WeaponEnchantId`, `GetWeaponEnchantInfo`-based) plus the
-first gated behavior — Shaman main-hand imbue upkeep (out-of-combat auto-apply, in-combat
-opt-in, default OFF) and a Rogue poison pre-pull reminder (warn-only). Off-hand imbue,
-poison auto-apply, and the Shaman totem-destruction detection remain open Phase 2 items.
-Current version: **0.15.0**.
+`UNIT_CASTEVENT`. **Phase 2 is underway:** a shared weapon-enchant detection helper
+(`Aegis_SBR:WeaponEnchant`/`WeaponEnchantId`, `GetWeaponEnchantInfo`-based, v0.15.0) backs
+Shaman main-hand imbue upkeep and a Rogue poison reminder — the latter was superseded in
+v0.16.0 by the **BuffUp integration** (`Aegis_SBR_BuffUp.lua`): an optional buff-watch
+monitor (any class, clickable rebuff buttons) and a rogue poison Quick Bar (up to 4
+presets, click-applied, never cast from the macro). Also since Phase 2 began: Warrior
+Battle Shout + Demoralizing Shout upkeep (v0.15.3, audit items W1/W4), an opt-in Rogue
+execute finisher and a Paladin double-heal fix (v0.16.0), and an opt-in Warrior Master
+Strike (v0.16.2, Arms talent, off by default). Off-hand imbue, poison auto-apply beyond
+the Quick Bar, and Shaman totem-destruction detection remain open Phase 2 items.
+**v1.1.0 is the current release** — a docs-only cut (README overhaul + a
+`docs/research-classicapi.md` deep-dive); no rotation/engine code changed in it.
 
 ## Tech Stack / Hard Constraints (WHAT — read carefully, these bite)
 - **Language: Lua 5.0** (Turtle 1.12 client). Non-negotiable:
@@ -127,11 +133,12 @@ Current version: **0.15.0**.
    version; the code has moved.
 3. **Incremental verified batches**: make a small, coherent change; verify; then proceed.
    Roll multi-file conversions (e.g. all class panels) in small batches, not all at once.
-4. **Version cut**: letter-suffix versioning (e.g. `0.13.12b` → `0.13.13b`; the rebrand
-   itself is a natural cut, e.g. `0.14.0`). Bump the version in BOTH canonical spots
-   (`.toc` and the core `.lua` `ver = "..."`) and prepend a `CHANGELOG.md` entry. Keep
-   them in sync — grep to confirm no stale version strings remain. **The README carries
-   no version string** (the user removed the version badge) — do not reintroduce one.
+4. **Version cut**: `1.1.0` and up is the current scheme (pre-rebrand used letter suffixes,
+   e.g. `0.13.12b`; post-rebrand ran `0.14.0`–`0.16.2` before the `v1.1.0` release cut).
+   Bump the version in ALL THREE canonical spots (`.toc`, the core `.lua` `ver = "..."`,
+   **and the README H1** — `# Aegis: Single Button Rotation (vX.Y.Z)`) and prepend a
+   `CHANGELOG.md` entry. Keep them in sync — grep to confirm no stale version strings
+   remain.
 5. **Preserve `.toc` load order** — reordering files can break the single-pass loader.
 6. Prefer **minimal, surgical diffs**; match existing code style and naming exactly.
 7. Confirm the plan with the user before large changes; the user tests in-game and reports
@@ -164,12 +171,14 @@ calculators block automated access.
   change. When you fix a class of bug, add a one-line note to this file so it isn't
   relearned.
 - **README badge header is USER-OWNED — preserve it verbatim.** The top of `README.md`
-  carries two shields.io badge rows the user curates by hand: row 1 = Discord (blurple
-  `5865F2`) · Octo WoW 1.18.1 (**purple** `8A2BE2`) · Capy WoW 1.18.1 (**brown** `A0522D`);
-  row 2 = SuperWoW / Nampower / UnitXP_SP3 (**Required**, **red** `c0392b`) then ClassicAPI /
-  SCRM (**Recommended**, **orange** `e67e22`), all `style=flat-square&labelColor=555`. Do NOT
-  add version/classes/license badges back, and do not reorder or re-colour the rows without
-  being asked. Keep the Requirements table's Required/Recommended split in step with row 2.
+  carries the version in the **H1** (`# Aegis: Single Button Rotation (vX.Y.Z)` — bump this
+  with every version cut, per Workflow step 4) plus two shields.io badge rows the user
+  curates by hand: row 1 = Discord (blurple `5865F2`) · Octo WoW 1.18.1 (**purple**
+  `8A2BE2`) · Capy WoW 1.18.1 (**brown** `8B5A2B`); row 2 = SuperWoW / Nampower / UnitXP_SP3
+  (**Required**, **red** `C41E3A`) then ClassicAPI / SCRM (**Recommended**, **orange**
+  `ff8c00`), all `style=flat-square&labelColor=555`. Do NOT add classes/license badges back,
+  and do not reorder or re-colour the rows without being asked. Keep the Requirements
+  table's Required/Recommended split in step with row 2.
 - **Lessons already learned (don't relearn):**
   - `verify.py`'s ordering audit only flags a local defined past the calling body's END —
     a function's own inner locals (incl. closure captures) are legal, don't "fix" them

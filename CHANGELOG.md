@@ -4,7 +4,45 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v0.15.5 — Warrior Master Strike (opt-in) + README refresh
+## v1.1.0 — Release: README overhaul, dependency accuracy pass
+
+**Docs-only release cut.** No rotation or engine code changed since v0.16.2 — this version
+marks the README reaching release quality: restructured, verified against the actual
+dependency stack, and carrying the project's real community links.
+
+- **README rewritten top to bottom**, in a scannable, badge-led format: a Contents table,
+  each of the nine class modules collapsed into its own `<details>` section (full detail
+  preserved), a *Requirements* table, a command reference split into general/per-class, an
+  *A few honest notes* section (hand-tuned priorities + the open audit, best-effort Turtle
+  names, manual AoE, no ground-target casting, the debuff cap, enchants as pre-pull-only
+  tools), an *Under the hood* file-tree + Lua 5.0 rationale, and a *Contributing* section
+  that states the no-silent-rotation-changes rule.
+- **Badge header** (Discord · Octo WoW · Capy WoW · the required/recommended dependency
+  stack) is now user-curated — see `CLAUDE.md` for the exact rows/colours to preserve on
+  future edits.
+- **Requirements table corrected against the actual source**, not assumed convention:
+  SuperWoW is the one true hard dependency (the four healer engines call
+  `CastSpellByName(spell, unit)` with no fallback — unit-targeted healing breaks without it);
+  Nampower's queue calls already fall back to a plain cast, so the addon *runs* without it
+  but loses clip-free cast timing; UnitXP_SP3 is SCRM's requirement, not one Aegis calls
+  directly; ClassicAPI is listed as not-yet-used, with a pointer to the new research doc.
+- **New `docs/research-classicapi.md`** — a deep-dive on the ClassicAPI DLL (250+ backported
+  Blizzard API functions for 1.12): what it could unlock for Aegis (enemy debuff *durations*
+  — the one gap the required stack can't fill — exact spell range, and a near-free profile
+  import/export via `C_EncodingUtil`), what it can't replace, the `CLAUDE.md` rule conflict
+  it raises (the blanket `C_*` ban predates this DLL), and an in-game verification checklist
+  before any of it is built.
+- **CHANGELOG history repaired.** A prior merge had left two version numbers each used
+  twice (`0.15.4` and `0.15.5`, one pair a literal duplicated header, the other a genuine
+  collision between two different features). Renumbered using each commit's own recorded
+  version bump as the source of truth: the BuffUp-integration entry is now correctly
+  `v0.16.0` (its commit cut the `.toc` to 0.16.0; that number was lost in a later rebase),
+  with the Sunder-slider and Master-Strike entries following it as `v0.16.1` / `v0.16.2`.
+  Every version number below is now used exactly once.
+
+---
+
+## v0.16.2 — Warrior Master Strike (opt-in) + README refresh
 
 **Feature + docs.**
 
@@ -26,8 +64,7 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v0.15.4 — Warrior UI: Sunder stacks slider folded into the Sunder Armor toggle
-## v0.15.5 — Warrior UI: Sunder stacks slider folded into the Sunder Armor toggle
+## v0.16.1 — Warrior UI: Sunder stacks slider folded into the Sunder Armor toggle
 
 **UI polish.** The Warrior *Sunder stacks* slider is now part of the *Sunder Armor* toggle
 row (a combined toggle+slider, matching the Hunter Mend Pet / Shaman Mana Tide rows) instead
@@ -36,7 +73,7 @@ the toggle (greyed when off) and hides when Sunder Armor isn't learned. No behav
 
 ---
 
-## v0.15.4 — BuffUp integration (buff monitor + rogue poison Quick Bar), Rogue execute, Paladin double-heal fix
+## v0.16.0 — BuffUp integration (buff monitor + rogue poison Quick Bar), Rogue execute, Paladin double-heal fix
 
 **Feature + fixes.** Folds the standalone **BuffUp** addon into Aegis as an optional upkeep monitor, adds a rogue execute finisher, and fixes a Paladin double-heal. If you ran standalone BuffUp, you can now retire it — Aegis covers the same ground.
 
