@@ -91,16 +91,16 @@ global cooldown mid-fight unless you say so.
 
 ## Requirements
 
-Aegis is built directly on these. SuperWoW in particular is not optional — cast detection,
-GUID targeting, and spell-ID debuff resolution all come from it.
+**SuperWoW is the one Aegis genuinely can't work without.** The rest of the stack is the
+recommended 1.18.1 setup — install it all and everything behaves as documented.
 
-| Mod | | Why |
+| Mod | | Why, specifically |
 |---|---|---|
-| **[SuperWoW](https://github.com/balakethelock/SuperWoW)** | Required | Unit GUIDs, `UNIT_CASTEVENT` cast detection, `SpellInfo` spell-ID resolution, off-target casting, weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
-| **[Nampower](https://github.com/brues-code/nampower)** | Required | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. |
-| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. |
-| **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | The client API layer the current 1.18.1 addon stack is built on. |
+| **[SuperWoW](https://github.com/balakethelock/SuperWoW)** | Required | The backbone. Healer specs cast on a **unit without dropping your target** (`CastSpellByName(spell, unit)`) — that's SuperWoW-only, and there's no fallback. It also supplies unit GUIDs (GUID-matched Assist targeting), `UNIT_CASTEVENT` (Auto Shot timing, Shaman totem tracking, Warlock cast confirmation), `SpellInfo` spell-ID debuff resolution, and weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
+| **[Nampower](https://github.com/brues-code/nampower)** | Required | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. Every queued cast falls back to a plain cast if it's missing, so the addon still *runs* — but cast-time rotations and the Hunter's Steady Shot weave lose their clip-free timing. |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. Aegis doesn't call it directly today — it's a hard requirement of SuperCleveRoidMacros' distance and enemy-count conditionals, and part of the standard stack. |
 | **[SuperCleveRoidMacros](https://github.com/brues-code/SuperCleveRoidMacros)** | Recommended | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. |
+| **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | A DLL backporting the modern Blizzard API to 1.12. **Aegis doesn't use it yet** — see [`docs/research-classicapi.md`](docs/research-classicapi.md) for what it could unlock (enemy debuff timers, exact spell range, profile import/export). |
 
 ---
 

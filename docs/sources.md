@@ -20,6 +20,7 @@ and don't trust the wrong source.
 | SuperWoW **Features** wiki — https://github.com/balakethelock/SuperWoW/wiki/Features | ✅ Fetches cleanly | Dependency API surface | 2026-07-17 (added UNIT_CASTEVENT swing types, SpellInfo extended returns, RAW_COMBATLOG, GetWeaponEnchantInfo(unit)) |
 | Nampower (avitasia fork) `SCRIPTS.md` / `EVENTS.md` — gitea.com/avitasia/nampower | ✅ Search/fetch works | Dependency updates (queue API, events) | 2026-07-15 |
 | SuperCleveRoidMacros wiki — https://github.com/jrc13245/SuperCleveRoidMacros/wiki | ✅ Fetches cleanly | Dependency updates (conditionals, reqs) | 2026-07-15 (repo archived/stable) |
+| ClassicAPI — https://github.com/brues-code/ClassicAPI | ✅ Repo page fetches; ⚠️ lists function NAMES only, no return signatures | The Recommended modern-API backport DLL (see `docs/research-classicapi.md`) | 2026-07-19 |
 | Turtle WoW Wiki — https://turtle-wow.fandom.com | ✅ Fetches cleanly | Confirmed custom mechanics | 2026-07-15 |
 | SuperWoW **release page** — /releases/tag/Release | ⚠️ Served STALE content | Do NOT rely on — use the Changelog wiki instead | — |
 | `talents.turtlecraft.gg/<class>` | ❌ Blocks bots (robots-disallowed) | USER browses; paste specifics. (Use `docs/TALENTS_1_18_1.md` instead.) | — |
