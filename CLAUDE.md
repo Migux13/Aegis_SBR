@@ -164,12 +164,12 @@ calculators block automated access.
   change. When you fix a class of bug, add a one-line note to this file so it isn't
   relearned.
 - **README badge header is USER-OWNED — preserve it verbatim.** The top of `README.md`
-  carries two shields.io badge rows the user curates by hand: row 1 = Discord · Octo WoW
-  1.18.1 · Capy WoW 1.18.1; row 2 = SuperWoW / Nampower / UnitXP_SP3 (**Required**, purple
-  `8A2BE2`) then ClassicAPI / SCRM (**Recommended**, amber `dfb317`), all
-  `style=flat-square&labelColor=555`. Do NOT add version/classes/license badges back, and do
-  not reorder or re-colour the rows without being asked. Keep the Requirements table's
-  Required/Recommended split in step with row 2.
+  carries two shields.io badge rows the user curates by hand: row 1 = Discord (blurple
+  `5865F2`) · Octo WoW 1.18.1 (**purple** `8A2BE2`) · Capy WoW 1.18.1 (**brown** `A0522D`);
+  row 2 = SuperWoW / Nampower / UnitXP_SP3 (**Required**, **red** `c0392b`) then ClassicAPI /
+  SCRM (**Recommended**, **orange** `e67e22`), all `style=flat-square&labelColor=555`. Do NOT
+  add version/classes/license badges back, and do not reorder or re-colour the rows without
+  being asked. Keep the Requirements table's Required/Recommended split in step with row 2.
 - **Lessons already learned (don't relearn):**
   - `verify.py`'s ordering audit only flags a local defined past the calling body's END —
     a function's own inner locals (incl. closure captures) are legal, don't "fix" them
