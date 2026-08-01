@@ -136,6 +136,7 @@ end
 M.templates = {
     starter = {  -- valid for a brand new paladin (only Seal of Righteousness)
         seals = { debuff = "", damage = "Seal of Righteousness" },
+        consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
@@ -143,6 +144,7 @@ M.templates = {
     },
     retri = {
         seals = { debuff = "Seal of the Crusader", damage = "Seal of Righteousness" },
+        consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
@@ -150,6 +152,7 @@ M.templates = {
     },
     prot = {
         seals = { debuff = "Seal of the Crusader", damage = "Seal of Righteousness" },
+        consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "tankblock",
@@ -157,6 +160,7 @@ M.templates = {
     },
     heal = {  -- group healer: heals the party/raid, keeps Seal of Wisdom for mana
         seals = { debuff = "", damage = "" },
+        consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
@@ -236,6 +240,8 @@ function M:NormalizeProfile(c)
         if c.spells[sk[i]] == nil then c.spells[sk[i]] = false end
     end
 
+    -- Let Consecration ignore the mana-recovery hold (see the rotation step).
+    if c.consecInMana == nil then c.consecInMana = false end
     if c.manaManage == nil then c.manaManage = false end
     if c.manaLow  == nil then c.manaLow  = 30 end
     if c.manaHigh == nil then c.manaHigh = 70 end
@@ -581,10 +587,20 @@ function M:DesiredOpenerSeal(cfg)
     return nil
 end
 
--- Exorcism only works on Undead and Demon targets.
+-- Exorcism only works on Undead and Demon targets. The creature type cannot
+-- change under a given target, so it is resolved once per target rather than on
+-- every press - the check sits in the rotation's hot path and this is a plain
+-- API call saved on all but the first press against each mob. Keyed by target
+-- id (GUID based, so same-named mobs are told apart), which also means a target
+-- swap re-reads immediately instead of answering from a stale cache.
 function M:TargetIsUndeadOrDemon()
-    local t = UnitCreatureType("target")
-    return t == "Undead" or t == "Demon"
+    local id = self:TargetId()
+    if id ~= self.creatureTypeId then
+        local t = UnitCreatureType("target")
+        self.creatureTypeId = id
+        self.creatureTypeUD = (t == "Undead" or t == "Demon")
+    end
+    return self.creatureTypeUD
 end
 
 -- ============================================================
@@ -1080,10 +1096,19 @@ function M:Rotate(cfg)
     end
     -- 2b. Consecration leads AoE: when toggled on (checkbox or /sbr aoe), cast it
     -- on cooldown right after the strike so it is a primary AoE source rather
-    -- than a leftover filler. Held during mana recovery. Ground-targeted, but a
-    -- plain cast drops it at your feet on the usual SuperWoW/Nampower setup.
-    -- (damage/tank mode only)
-    if not cfg.healMode and cfg.spells.consecration and not self.manaMgmtActive
+    -- than a leftover filler. Ground-targeted, but a plain cast drops it at your
+    -- feet on the usual SuperWoW/Nampower setup. (damage/tank mode only)
+    --
+    -- Held during mana recovery UNLESS consecInMana is set. That opt-out exists
+    -- because the recovery flag is a latching hysteresis: it switches on below
+    -- manaLow and only off again at manaHigh, so with a wide band (a tank on
+    -- 60/90, say) it can stay on for an entire fight - mana sitting comfortably
+    -- in between, yet Consecration silently suppressed the whole time. The flag
+    -- is not surfaced anywhere, so that reads as "it is off cooldown and simply
+    -- not being cast". For a tank the AoE threat usually matters more than the
+    -- mana it saves, hence the switch.
+    if not cfg.healMode and cfg.spells.consecration
+        and (not self.manaMgmtActive or cfg.consecInMana)
         and self:KnowsSpell("Consecration") and self:IsReady("Consecration") then
         if self:Cast("Consecration") then return end
     end

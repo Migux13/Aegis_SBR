@@ -64,6 +64,7 @@ function M:BuildBody(ui, parent)
     self.spellCB.hammerOfWrath = L:Row{ key = "hammerOfWrath", label = "Hammer of Wrath", spell = "Hammer of Wrath", onToggle = sset("hammerOfWrath") }
     self.spellCB.repentance = L:Row{ key = "repentance", label = "Repentance", spell = "Repentance", onToggle = sset("repentance") }
     self.spellCB.consecration = L:Row{ key = "consecration", label = "Consecration", spell = "Consecration", onToggle = sset("consecration") }
+    self.consecManaRow = L:Row{ key = "consecInMana", label = "Consecration also in mana recovery", onToggle = set("consecInMana") }
     self.spellCB.exorcism = L:Row{ key = "exorcism", label = "Exorcism", spell = "Exorcism", onToggle = sset("exorcism") }
     self.twistRow = L:Row{ key = "sealTwist", label = "Seal twisting", onToggle = set("sealTwist") }
 
@@ -105,7 +106,8 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.spellCB.holyShield.cb,     "Holy Shield",     "Cast right after the strike, before seals.", "Fires whenever its own cooldown is ready.")
     ui:Tip(self.spellCB.hammerOfWrath.cb,  "Hammer of Wrath", "Execute, used only at or below 20 percent target HP.")
     ui:Tip(self.spellCB.repentance.cb,     "Repentance",      "Cast on cooldown as a damage proc on Turtle.")
-    ui:Tip(self.spellCB.consecration.cb,   "Consecration (AoE)", "AoE filler, cast on cooldown. Manual toggle (also /sbr aoe), since 1.12 cannot count nearby enemies.", "Held during mana recovery.")
+    ui:Tip(self.spellCB.consecration.cb,   "Consecration (AoE)", "AoE filler, cast on cooldown. Manual toggle (also /sbr aoe), since 1.12 cannot count nearby enemies.", "Held during mana recovery unless the option below is on.")
+    ui:Tip(self.consecManaRow.cb, "Consecration also in mana recovery", "Keeps casting Consecration even while mana recovery is running, instead of holding it until mana is back up.", "Worth knowing: mana recovery LATCHES. It switches on below the 'Switch below' value and only off again at 'Back above', so with a wide band (60/90 on a tank, say) it can stay on for a whole fight with mana sitting comfortably in between - and Consecration stays silently suppressed the entire time. If yours seems off cooldown but never fires, this is why. For a tank the AoE threat usually beats the mana saved.")
     ui:Tip(self.spellCB.exorcism.cb,       "Exorcism",        "Strong nuke, used on cooldown but only against Undead and Demon targets.", "Held during mana recovery.")
     ui:Tip(self.spellCB.holyStrike.cb, "Holy Strike", "Shares the 6s strike cooldown with Crusader Strike.", "With Vengeful Strikes it grants Holy Might. Even untalented it returns mana and heals the group.")
     ui:Tip(self.spellCB.crusaderStrike.cb, "Crusader Strike", "Shares the 6s strike cooldown with Holy Strike.", "Builds Zeal. Tank: with Righteous Strikes it also loads the block buff Zealous Defense.")
@@ -153,6 +155,14 @@ function M:RefreshBody(ui, buf)
     setCB("holyStrike"); setCB("crusaderStrike")
     setCB("holyShield"); setCB("hammerOfWrath"); setCB("repentance")
     setCB("consecration"); setCB("exorcism")
+
+    -- The mana-recovery override only means anything while Consecration itself
+    -- is on, so it greys out with it.
+    ui:BindCheck(self.consecManaRow, buf.consecInMana)
+    if not buf.spells.consecration then
+        self.consecManaRow.cb:Disable()
+        ui:Color(self.consecManaRow.label, ui.COL.grey)
+    end
 
     -- Both-on strategy: only meaningful when BOTH strikes are enabled. With a
     -- single strike on it is used exclusively, so the box is greyed and its text
