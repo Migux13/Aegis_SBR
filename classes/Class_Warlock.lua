@@ -548,7 +548,7 @@ function M:ApplyDot(spellName, texFrag, interval)
     local id = self:TargetId()
     local rec = self.dotThrottle[spellName]
     local now = GetTime()
-    if self.trace then
+    if self:Tracing() then
         local throttleAge = (rec and rec.id == id and rec.t) and (now - rec.t) or -1
         local pend = self.dotPending[spellName]
         local pendAge = (pend and pend.id == id) and (now - pend.t) or -1
@@ -686,7 +686,7 @@ function M:Rotate(cfg)
         end
         if self:HasWand() then
             if self:Wanding() then return end
-            if self.trace then
+            if self:Tracing() then
                 self:Trace(string.format("wandstart ready=%s mana=%.0f hp=%.0f",
                     tostring(self:IsReady("Shoot")), self:ManaPct(), hp))
             end
@@ -748,7 +748,7 @@ function M:Rotate(cfg)
     local dotStopHp = cfg.dotStopHp or 0
     local dotsSuppressed = dotStopHp > 0 and thp <= dotStopHp
 
-    if self.trace then
+    if self:Tracing() then
         local up = ""
         for i = 1, table.getn(order) do
             local sp, tex = order[i][1], order[i][2]
@@ -806,7 +806,7 @@ function M:Rotate(cfg)
             -- cast record for this target) is not treated as urgent, so the
             -- channel is not blocked on a guess.
             local minRemain = self:DHMinDotRemain()
-            if self.trace then
+            if self:Tracing() then
                 local id = self:TargetId()
                 for i = 1, table.getn(order) do
                     local sp = order[i][1]

@@ -583,7 +583,7 @@ function M:Rotate(cfg)
     -- Resolve smart sting (Viper > Serpent) to the effective sting for this target
     local effectiveSting = self:ResolveSting(cfg)
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("mode=" .. (cfg.mode or "ranged") .. (cfg.mode == "auto" and ("/" .. (melee and "melee" or "ranged")) or "")
             .. " hp=" .. floor(targetHP)
             .. " sting=" .. (cfg.sting ~= "" and (cfg.sting

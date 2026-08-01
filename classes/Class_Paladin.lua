@@ -1025,7 +1025,7 @@ function M:Rotate(cfg)
         if self:HealSeals(cfg) then return end
     end
 
-    if self.trace then
+    if self:Tracing() then
         local db = cfg.seals.debuff
         local strk = (self:StrikeEnabled(cfg) and self:SharedStrikeReady(cfg)) and "Y" or "N"
         self:Trace(

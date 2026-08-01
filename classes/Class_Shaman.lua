@@ -653,7 +653,7 @@ function M:RotateEnhancement(cfg)
     local shock = self:ShockSpell(cfg)
     local cc = self:HasClearcast() and self:ClearcastUp()
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("enh shock=" .. (shock ~= "" and shock or "-")
             .. " ss=" .. (cfg.useStormstrike and (self:KnowsSpell("Stormstrike") and "Y" or "n") or "-")
             .. " ls=" .. (cfg.useLightningStrike and (self:KnowsSpell("Lightning Strike") and "Y" or "n") or "-")
@@ -708,7 +708,7 @@ end
 function M:RotateElemental(cfg)
     local cc = self:HasClearcast() and self:ClearcastUp()
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("ele shock=" .. (self:ShockSpell(cfg) ~= "" and self:ShockSpell(cfg) or "-")
             .. " cc=" .. (cc and "Y" or "n")
             .. " EM=" .. (cfg.useElementalMastery and (self:KnowsSpell("Elemental Mastery") and "Y" or "n") or "-")
@@ -754,7 +754,7 @@ function M:RotateTank(cfg)
     self:EnsureMeleeSwing()
     local shock = self:ShockSpell(cfg)
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("tank shock=" .. (shock ~= "" and shock or "-")
             .. " ss=" .. (cfg.useStormstrike and (self:KnowsSpell("Stormstrike") and "Y" or "n") or "-")
             .. " ls=" .. (cfg.useLightningStrike and (self:KnowsSpell("Lightning Strike") and "Y" or "n") or "-")
