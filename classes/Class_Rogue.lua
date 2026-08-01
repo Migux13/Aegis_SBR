@@ -34,8 +34,31 @@ local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
 -- is needed for any of them (previously SnD and Envenom used a hardcoded
 -- duration table stamped at cast time; that guess is gone now that the real
 -- timer reads back reliably).
+--
+-- Reading the live timer is also why no duration table is maintained here any
+-- more - but the underlying numbers still matter when reasoning about upkeep
+-- cost, so they live in docs/turtle-mechanics.md (Rogue section) instead of
+-- being re-derived. The one that bites: Turtle's SnD duration talent is called
+-- **Improved Blade Tactics** (not "Improved Slice and Dice"), +45% at 3/3, and
+-- the spell tooltip shows only the BASE duration - so a talented rogue's Slice
+-- and Dice really lasts 13.05-30.45s, not the 9-21s the tooltip implies.
 local TALENT_TASTE = "Taste for Blood"
-local BUFF_RENEW = 5    -- a buff counts as expiring soon below this remaining time
+-- Default renew window: seconds of remaining buff time at or below which Slice
+-- and Dice / Envenom are re-applied. Overridable per profile via cfg.buffRenew.
+-- This used to be 5, sized for the era when the remaining time was ESTIMATED
+-- from a stamped duration table - a wide margin was right when the number could
+-- be wrong. Now that the real timer is read (see the header), that justification
+-- is gone and 5s was simply throwing away up to a sixth of the buff's life, and
+-- with it the combo points that paid for it. Lower is more efficient; too low
+-- risks dropping the buff, because at 0 combo points the refresh needs TWO
+-- presses (a builder first), which on an energy-starved rogue can take several
+-- seconds. 0 means "only once it has actually dropped" - hence the <= test at
+-- the call site, so a fully expired buff (BuffTime returns 0) still qualifies.
+-- 1 is measured, not guessed: a 2 minute press log at this setting refreshed
+-- with an average of 0.64s left on the buff, never dropped Slice and Dice, and
+-- lost Envenom only three times for ~2.4s combined (2% downtime) - far less
+-- than the up-to-4s of buff life the old 5 threw away on every single refresh.
+local BUFF_RENEW = 1
 -- Taste for Blood gets a wider renew window than the other two buffs: Slice and
 -- Dice and Envenom can be refreshed at any combo point, while Rupture waits for
 -- its own (higher) point threshold, so its opportunity comes around far less
@@ -51,7 +74,7 @@ M.templates = {
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = false,
         useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
-        cpFinish = 4, popCDs = false, autoCDElite = false,
+        cpFinish = 4, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = false,
     },
     assassination = {
         builder = "", useSnd = true, useEnvenom = true, useRupture = true, useRiposte = true,
@@ -61,13 +84,13 @@ M.templates = {
         -- keep-the-stronger-one logic - so anything below 5 risks replacing an existing 10%
         -- buff with a weaker one the moment Rupture comes due (Discord-reported, confirmed).
         useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 5,
-        cpFinish = 4, popCDs = false, autoCDElite = false,
+        cpFinish = 4, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = false,
     },
     combat = {
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = true,
         useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
-        cpFinish = 5, popCDs = false, autoCDElite = true,
+        cpFinish = 5, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = true,
     },
 }
 
@@ -104,6 +127,12 @@ function M:NormalizeProfile(c)
     -- combo point goes into the maintained buffs instead.
     if c.evisExecuteOnly == nil then c.evisExecuteOnly = false end
     if c.cpFinish == nil then c.cpFinish = 4 end
+    -- Renew window for Slice and Dice / Envenom, in seconds of remaining time.
+    -- Existing profiles are moved off the old hardcoded 5 deliberately: that
+    -- value only ever existed to cover an estimated timer we no longer use.
+    if c.buffRenew == nil then c.buffRenew = BUFF_RENEW end
+    -- Cold Blood: opt-in. Rides along with Eviscerate only (see ColdBloodBefore).
+    if c.useColdBlood == nil then c.useColdBlood = false end
     if c.popCDs == nil then c.popCDs = false end
     if c.autoCDElite == nil then c.autoCDElite = false end
     -- old keys from any earlier format are dropped silently
@@ -184,6 +213,25 @@ function M:RuptureDue()
     return not self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture")
 end
 
+-- Fire Cold Blood immediately before the Eviscerate it is meant to turn into a
+-- crit. Confirmed in game that it costs no global cooldown, so both go out in
+-- the same press - and that is the whole point: the buff applies to the NEXT
+-- Sinister Strike, Backstab, Ambush, Noxious Assault or Eviscerate, and
+-- Noxious Assault is a BUILDER. Popped at any other moment it is eaten by the
+-- next builder for a fraction of the payoff, so it is deliberately not a
+-- priority step of its own - it only ever rides along with a finisher.
+-- Gated on cpFinish rather than a threshold of its own: that setting already
+-- means "enough points for Eviscerate to be worth it", and it keeps the 3
+-- minute cooldown off the execute finisher, which fires with whatever is on
+-- hand (often 1-2 points) and would waste the crit.
+function M:ColdBloodBefore(cfg, cp)
+    if not cfg.useColdBlood then return end
+    if cp < (cfg.cpFinish or 4) then return end
+    if not self:KnowsSpell("Cold Blood") then return end
+    if not self:OwnCDReady("Cold Blood") then return end
+    CastSpellByName("Cold Blood")
+end
+
 -- ============================================================
 -- Rotation. The core has already secured a target and ensured auto attack.
 -- Cooldowns are off the global cooldown, so they may be cast in the same
@@ -217,7 +265,7 @@ function M:Rotate(cfg)
     -- finisher, so this is rarely blocked once a fight is underway).
     local execute = cfg.useExecute and cp >= 1 and self:TargetHPPct() <= (cfg.executeHpPct or 10)
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("cp=" .. cp
             .. " build=" .. builder
             .. " snd=" .. (useSnd and string.format("%.1fs", self:BuffTime("Slice and Dice")) or "-")
@@ -228,6 +276,8 @@ function M:Rotate(cfg)
             .. " rip=" .. ((cfg.useRiposte and now < (self.riposteExpiry or 0)) and "Y" or "N")
             .. " sa=" .. ((cfg.useSurpriseAttack and now < (self.surpriseExpiry or 0)) and "Y" or "N")
             .. " exec=" .. (cfg.useExecute and (execute and "Y" or "N") or "-")
+            .. " cb=" .. (cfg.useColdBlood and (self:KnowsSpell("Cold Blood")
+                and (self:OwnCDReady("Cold Blood") and "rdy" or "cd") or "?") or "-")
             .. " elite=" .. (isElite and "Y" or "N"),
             -- Rogue never downranks (all ranks cost the same energy), so every
             -- Cast() below is a bare CastSpellByName(name) - vanilla resolves
@@ -268,8 +318,13 @@ function M:Rotate(cfg)
     -- off the real buff timer now (see the header comment above).
     local sndLeft = useSnd and self:BuffTime("Slice and Dice") or 0
     local envLeft = useEnv and self:BuffTime("Envenom") or 0
-    local sndDue = useSnd and sndLeft < BUFF_RENEW
-    local envDue = useEnv and envLeft < BUFF_RENEW
+    -- 0 is a meaningful setting here ("wait until it has actually dropped"), and
+    -- 0 is truthy in Lua, so the `or` fallback only fires for a genuinely unset
+    -- field. The test is <= rather than < so that a lapsed buff, which reads as
+    -- 0 seconds remaining, still counts as due when the window is set to 0.
+    local renew = cfg.buffRenew or BUFF_RENEW
+    local sndDue = useSnd and sndLeft <= renew
+    local envDue = useEnv and envLeft <= renew
     local rupDue = useRup and self:RuptureDue()
     local rupCP = cfg.ruptureCP or 3
 
@@ -278,6 +333,7 @@ function M:Rotate(cfg)
     -- points go straight into damage.
     -- ------------------------------------------------------------
     if execute then
+        self:ColdBloodBefore(cfg, cp)
         self:Cast("Eviscerate")
         return
     end
@@ -319,6 +375,7 @@ function M:Rotate(cfg)
     -- into the buffs instead.
     -- ------------------------------------------------------------
     if not cfg.evisExecuteOnly and not rupDue and cp >= cpEvis then
+        self:ColdBloodBefore(cfg, cp)
         self:Cast("Eviscerate")
         return
     end

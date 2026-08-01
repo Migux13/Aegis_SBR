@@ -83,6 +83,45 @@ forum.turtlecraft.gg theorycraft threads, r/turtlewow, community class guides.
   after dodge, unblockable. **Combo points reset (not lost) on target switch.** Blade Rush
   scales energy regen with agility. Rogues can wield 1H axes.
 
+### Finisher numbers (in-game tooltips, confirmed)
+All three upkeep finishers cost **20 energy** — do NOT assume the vanilla 25/35 values.
+- **Slice and Dice** (Rank 2): +30% melee attack speed. Base 9/12/15/18/21s for 1-5 CP.
+- **Envenom** (Assassination talent): +30% poison effectiveness **and** +30% application
+  chance. 12/16/20/24/28s for 1-5 CP. **Not** extended by Improved Blade Tactics.
+- **Rupture** (Rank 6): 272/380/504/644/**800** damage over 8/10/12/14/**16**s for 1-5 CP.
+- **Eviscerate**: cost not yet captured; assumed higher than the 20 above.
+
+### Improved Blade Tactics (Assassination) — Turtle's SnD duration talent
+There is **no "Improved Slice and Dice"** in Turtle; the equivalent is **Improved Blade
+Tactics**, 3 ranks, **+45% duration** at 3/3 on *Slice and Dice and Flourish* (tooltip
+confirmed). The spell tooltip shows BASE durations, so the talent is invisible there.
+At 3/3 the real SnD durations are **13.05 / 17.4 / 21.75 / 26.1 / 30.45s** for 1-5 CP.
+Easy to miss because the talent name gives no hint, and it changes the upkeep maths
+completely — a 5-CP refresh lasts more than twice a 1-CP one.
+
+### Taste for Blood (Assassination, 2 ranks) — tooltip confirmed at 2/2
+Extends Rupture's duration by **6s** and grants **+2% melee damage per combo point** for
+that full duration, *"regardless of successful application"* (so a resisted/dodged Rupture
+still buffs). At 5 CP that is **+10% melee damage for 22s**. Note **melee** — it does not
+touch poison damage, which is where a poison build's damage actually lives (below).
+
+### Measured damage split (full dungeon, lvl-60 Assassination/poison build)
+1,209,897 damage, 388.4 DPS. Instant Poison VI **66.2%** · Auto Hit **13.8%** · Noxious
+Assault **10.9%** · Eviscerate **7.5%** · Rupture **0.8%** · rest negligible.
+Consequences for rotation design on this kind of build:
+- **Poisons are two thirds of the damage.** Anything that adds weapon swings or poison
+  application is a multiplier on the main damage source: Slice and Dice (+30% swings),
+  Envenom (+30% effectiveness and application), and **Noxious Assault, which guarantees
+  poison application from BOTH weapons** — its real contribution is far larger than the
+  10.9% the meter credits it, because the procs it forces are booked under the poison.
+- **Taste for Blood can only lift the melee buckets** (Auto Hit + Noxious Assault +
+  Eviscerate ~ 32%), so even at 100% uptime it is worth ~3% overall — and Rupture's own
+  DoT measured 0.8%. On short-lived trash, where the 16s DoT never ticks out, Rupture is
+  not worth its 5-CP peak; on a boss it is a different calculation.
+- Profile used for the measurement: builder Noxious Assault, cpFinish 5, ruptureCP 5,
+  `evisExecuteOnly` ON, execute at 20%, SnD + Envenom + Rupture all maintained, cooldowns
+  off. Keep this as the baseline when A/B testing rotation changes.
+
 ## Priest
 - **Discipline reworked into holy-damage support DPS** (Smite/Holy Fire focus). **PW:Shield
   castable in Shadowform.** **Proclaim Champion** (Holy capstone): tank buff (DR, resist,
