@@ -149,7 +149,67 @@ end
 -- Throttled per-press trace, toggled with /sbr trace. Accepts any number of
 -- lines; the throttle is checked once so multi-line traces are never half
 -- swallowed (Lua 5.0 packs varargs into the implicit `arg` table).
+-- ============================================================
+-- Press log (AegisLog). The 1.12 Lua sandbox has no file access at all - no
+-- io, no os - so the only way to get data off the client is a SavedVariable,
+-- which the client serialises to
+--   WTF\Account\<ACCOUNT>\<Realm>\<Char>\SavedVariables\Aegis_SBR.lua
+-- on /reload or logout. It is therefore NOT live: nothing is on disk until
+-- one of those happens. Kept in its own SavedVariable rather than inside
+-- AegisDB so a big log can never bloat or endanger the profile data, and so
+-- it can be cleared on its own.
+--
+-- A true ring buffer (write index that wraps) rather than append-and-trim:
+-- table.remove(t, 1) would shift every entry on every press, which at a
+-- multi-thousand cap is real work inside the rotation's hot path.
+-- ============================================================
+local LOG_MAX = 2000
+
+function Aegis_SBR:LogInit(reset)
+    if type(AegisLog) ~= "table" then AegisLog = {} end
+    if reset or type(AegisLog.entries) ~= "table" then
+        AegisLog.entries = {}
+        AegisLog.pos = 0        -- entries written since the last clear (can exceed max)
+        AegisLog.max = LOG_MAX
+        AegisLog.started = date and date("%Y-%m-%d %H:%M:%S") or ""
+        AegisLog.t0 = GetTime()
+    end
+    if not AegisLog.t0 then AegisLog.t0 = GetTime() end
+    if not AegisLog.max then AegisLog.max = LOG_MAX end
+    return AegisLog
+end
+
+-- Append one line. Timestamps are seconds since the log was (re)started, so
+-- the file stays readable without needing wall-clock per entry.
+function Aegis_SBR:LogWrite(text)
+    if not text then return end
+    local L = self:LogInit()
+    L.pos = (L.pos or 0) + 1
+    local slot = math.mod(L.pos - 1, L.max) + 1
+    L.entries[slot] = string.format("%.2f|%s", GetTime() - (L.t0 or 0), text)
+end
+
+-- True when anything wants trace output - chat, the press log, or both. The
+-- class modules build their trace strings inside a guard so the concatenation
+-- is skipped entirely when nobody is listening; that guard MUST use this and
+-- not self.trace, or enabling only the log records nothing (the string is
+-- never built, so Trace is never even called).
+function Aegis_SBR:Tracing()
+    return (self.trace or self.logging) and true or false
+end
+
+-- Chat trace and the press log are independent on purpose: the chat line is
+-- throttled to stay readable while playing, but the log wants EVERY press or
+-- the CP distribution it is meant to answer would be a biased sample.
+-- Only the FIRST line is logged. Callers pass the per-press state line first and
+-- any supplementary diagnostics after it; those extras are static for a whole
+-- session (the rogue's "rank: ..." line, for instance, never changes while
+-- playing), so recording them once per press doubled both the file size and the
+-- number of ring slots burned, for nothing. They stay in the chat trace, which
+-- is where they are actually useful.
 function Aegis_SBR:Trace(...)
+    if not self.trace and not self.logging then return end
+    if self.logging and arg[1] then self:LogWrite(arg[1]) end
     if not self.trace then return end
     local now = GetTime()
     if now - (self.traceT or 0) < 0.4 then return end
@@ -788,6 +848,39 @@ function Aegis_SBR:EvalCommand(msg)
         msgOut("trace " .. (self.trace and "on (per-press log)" or "off"))
         return
     end
+    if cmd == "log" then
+        local sub = string.lower(t[2] or "")
+        -- Read the current state WITHOUT creating the table: only "on" and
+        -- "clear" may bring AegisLog into existence, so merely asking for the
+        -- status never leaves a saved variable behind on a machine that has
+        -- never recorded anything.
+        local have = (type(AegisLog) == "table") and AegisLog or nil
+        local cap = (have and have.max) or LOG_MAX
+        local held = (have and have.pos) or 0
+        if held > cap then held = cap end
+        if sub == "on" then
+            self:LogInit()
+            self.logging = true
+            AegisLog.enabled = true
+            msgOut("press log ON - every press is recorded (chat trace is separate).")
+            msgOut("Run your test, then /reload to write the file, then read it from:", 0.7, 0.7, 0.7)
+            msgOut("WTF\\Account\\<ACCOUNT>\\<Realm>\\<Char>\\SavedVariables\\Aegis_SBR.lua", 0.7, 0.7, 0.7)
+        elseif sub == "off" then
+            self.logging = false
+            if have then have.enabled = false end
+            msgOut("press log OFF. " .. held .. " lines held - /reload to write them out.")
+            msgOut("They are dropped on the load AFTER that, so the saved file does not keep them forever.", 0.7, 0.7, 0.7)
+        elseif sub == "clear" then
+            self:LogInit(true)
+            msgOut("press log cleared.")
+        else
+            msgOut("press log is " .. (self.logging and "ON" or "off")
+                .. ", holding " .. held .. " of " .. cap .. " lines"
+                .. (((have and have.pos) or 0) > cap and " (oldest overwritten)" or "") .. ".")
+            msgOut("usage: /sbr log on|off|clear  - NOT written to disk until /reload or logout.", 0.7, 0.7, 0.7)
+        end
+        return
+    end
     if cmd == "ui" or cmd == "config" then
         if self.active and self.active.OpenConfig then self.active:OpenConfig()
         else msgOut("no configuration UI for this class yet.", 1, 0.5, 0.3) end
@@ -800,6 +893,10 @@ function Aegis_SBR:EvalCommand(msg)
         return
     end
 
+    -- `log` is intentionally absent from this list: it is a development aid for
+    -- capturing a rotation trace to file, not something a player has any use
+    -- for. It still works when typed, so it can be handed out on request when
+    -- diagnosing a report ("/sbr log on, play a bit, /reload, send me the file").
     msgOut("commands: ui, list, use, off, new, del, check, reset, acquire, minimap, debug, talents, trace (plus class commands).")
 end
 
@@ -815,6 +912,22 @@ function Aegis_SBR:OnAddonLoaded()
     if (type(AegisDB) ~= "table" or not next(AegisDB)) and type(AutoRotaDB) == "table" then
         AegisDB = AutoRotaDB
         AegisDB._migratedFrom = "AutoRotaDB"
+    end
+    -- Press log: a development tool, not a player feature. It is deliberately
+    -- NOT initialised here - AegisLog is created lazily, on the first /sbr log
+    -- on. A player who never touches the command therefore never gets the
+    -- variable created and never carries it in their saved file; the table
+    -- below is only ever touched if one already exists from a previous session.
+    --
+    -- The log survives /reload on purpose: /reload is exactly what flushes it
+    -- to disk, so clearing it there would destroy the recording at the moment
+    -- the user is trying to save it. Entries are dropped one load AFTER
+    -- logging is switched off, so a finished test does not linger forever.
+    if type(AegisLog) == "table" then
+        self.logging = AegisLog.enabled and true or false
+        if not self.logging and type(AegisLog.entries) == "table" and next(AegisLog.entries) then
+            self:LogInit(true)
+        end
     end
     local _, class = UnitClass("player")
     self.active = self.classes[class]

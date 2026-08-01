@@ -318,7 +318,7 @@ function M:Rotate(cfg)
     local inExecute = cfg.useExecute and hp <= 20 and self:KnowsSpell("Execute")
         and rage >= RAGE["Execute"] and not self:InStance("Defensive Stance")
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("rage=" .. rage
             .. " stance=" .. (self:CurrentStanceName() or "-")
             .. " hp=" .. string.format("%.0f", hp)

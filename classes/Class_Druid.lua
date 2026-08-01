@@ -299,7 +299,7 @@ function M:RotateCat(cfg)
 
     self:EnsureMeleeSwing()
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("cat style=" .. (cfg.catStyle or "bleed")
             .. " energy=" .. energy .. " cp=" .. cp
             .. " prowl=" .. (self:HasBuff("Prowl") and "Y" or "N")
@@ -370,7 +370,7 @@ function M:RotateBear(cfg)
 
     self:EnsureMeleeSwing()
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("bear rage=" .. rage
             .. " def=" .. (self.hpDefenseActive and "Y" or "N")
             .. " FF=" .. (cfg.ffBear and (self:DebuffUp("Faerie Fire (Feral)") and "Y" or "n") or "-")
@@ -424,7 +424,7 @@ end
 function M:RotateCaster(cfg)
     local side = cfg.eclipse and self:EclipseSide() or nil
 
-    if self.trace then
+    if self:Tracing() then
         self:Trace("caster nuke=" .. (cfg.nuke or "Wrath")
             .. " MF=" .. (cfg.useMoonfire and (self:DebuffUp("Moonfire") and "Y" or "n") or "-")
             .. " IS=" .. (cfg.useInsectSwarm and (self:DebuffUp("Insect Swarm") and "Y" or "n") or "-")
@@ -681,7 +681,7 @@ function M:RotateResto(cfg)
     -- Heals only cast in caster form; drop any shapeshift first (no Tree auto-shift).
     local form = self:CurrentForm()
     if form then
-        if self.trace then self:Trace("resto: dropping " .. form .. " to cast") end
+        if self:Tracing() then self:Trace("resto: dropping " .. form .. " to cast") end
         self:CastSafe(form)
         return
     end
@@ -778,7 +778,7 @@ function M:Rotate(cfg)
     if self.hpDefenseActive then
         if not inBear then
             local b = self:BearFormSpell()
-            if self.trace then self:Trace("DEFENSE: hp " .. string.format("%.0f", self:PlayerHPPct()) .. "%, shifting to " .. b) end
+            if self:Tracing() then self:Trace("DEFENSE: hp " .. string.format("%.0f", self:PlayerHPPct()) .. "%, shifting to " .. b) end
             self:CastSafe(b)
             return
         end
@@ -799,7 +799,7 @@ function M:Rotate(cfg)
     else
         if cfg.form == "caster" then
             if self:KnowsSpell("Moonkin Form") then
-                if self.trace then self:Trace("entering Moonkin Form") end
+                if self:Tracing() then self:Trace("entering Moonkin Form") end
                 self:CastSafe("Moonkin Form")
                 return
             end
@@ -808,7 +808,7 @@ function M:Rotate(cfg)
         end
         local want = self:PreferredFormSpell(cfg)
         if want then
-            if self.trace then self:Trace("caster form, shifting into " .. want) end
+            if self:Tracing() then self:Trace("caster form, shifting into " .. want) end
             self:CastSafe(want)
         else
             -- no combat form learned yet: the caster loop carries level 1+

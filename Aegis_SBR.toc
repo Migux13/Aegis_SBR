@@ -3,7 +3,7 @@
 ## Notes: Configurable one-button rotation, multi class (Turtle WoW 1.18.1 (1.12 client) / SuperWoW). Formerly AutoRota.
 ## Author: Mercaius & Subtilizer (Torchlite)
 ## Version: 1.1.0
-## SavedVariablesPerCharacter: AegisDB, AutoRotaDB
+## SavedVariablesPerCharacter: AegisDB, AutoRotaDB, AegisLog
 
 Aegis_SBR.lua
 Aegis_SBR_UI.lua
