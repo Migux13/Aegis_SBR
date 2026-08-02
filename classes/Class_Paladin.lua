@@ -82,6 +82,21 @@ M.HL_MANA  = { 35, 60, 110, 190, 275, 365, 465, 580, 660 }
 M.HS_HEAL  = { 315, 360, 500, 655 }
 M.HS_MANA  = { 225, 335, 410, 485 }
 
+-- +Healing penalty factor for spells learnt BEFORE level 20: such a rank only
+-- receives (1 - (20 - levelLearnt) * 0.0375) of the gear bonus, while its base
+-- heal is unaffected. This is what stops downranking from scaling for free with
+-- +healing, and it only bites harder the better the gear gets - at +900 healing
+-- an unpenalised Holy Light rank 1 looks like a ~690 heal when it actually lands
+-- ~230, so the rank picker would happily choose it and badly underheal.
+--
+-- Verified against QuickHeal (QuickHealPaladin.lua), which documents the same
+-- formula in a comment and applies it identically; its priest module derives a
+-- different set of factors from the same rule, which confirms the reading.
+-- Only Holy Light is affected: ranks 1/2/3 are learnt at level 1/6/14. Flash of
+-- Light starts at level 20 and Holy Shock at 40, so both come out at a factor of
+-- 1 and need no table.
+M.HL_PEN = { 0.2875, 0.475, 0.775 }   -- ranks 1-3; nil (= 1) from rank 4 up
+
 -- Auto-read the gear +healing bonus by scanning equipped-item tooltips. Cached,
 -- refreshed when equipment changes. A manual healPower above zero overrides it.
 local healScanTip = CreateFrame("GameTooltip", "Aegis_SBR_HealScan", nil, "GameTooltipTemplate")
@@ -749,10 +764,15 @@ function M:HealMods()
 end
 
 -- Effective heal per rank: base + healing-coefficient * bonus, then talents.
-function M:EffHeals(baseHeals, coeff, mods, healPower)
+-- `pen` is the optional per-rank +healing penalty for ranks learnt below level
+-- 20 (see HL_PEN). It scales ONLY the gear-bonus part, never the base heal,
+-- which is what makes a downranked heal stop keeping pace with gear.
+function M:EffHeals(baseHeals, coeff, mods, healPower, pen)
     local t = {}
     for r = 1, table.getn(baseHeals) do
-        t[r] = (baseHeals[r] + coeff * (healPower or 0)) * mods
+        local p = 1
+        if pen and pen[r] then p = pen[r] end
+        t[r] = (baseHeals[r] + coeff * (healPower or 0) * p) * mods
     end
     return t
 end
@@ -841,7 +861,7 @@ function M:DoHeal(cfg)
     local hlMod, dfMod = self:HealMods()
     local C15, C25 = 1.5 / 3.5, 2.5 / 3.5
     local folEff = self:EffHeals(self.FOL_HEAL, C15, hlMod, hp)
-    local hlEff  = self:EffHeals(self.HL_HEAL,  C25, hlMod, hp)
+    local hlEff  = self:EffHeals(self.HL_HEAL,  C25, hlMod, hp, self.HL_PEN)
     local hsEff  = self:EffHeals(self.HS_HEAL,  C15, hlMod * dfMod, hp)
 
     -- Healing-reduction debuffs (Mortal Strike and the like) inflate the
