@@ -91,6 +91,11 @@ forum.turtlecraft.gg theorycraft threads, r/turtlewow, community class guides.
 ## Warlock
 - **Dark Harvest** (Affliction capstone). **Nightfall** procs from Corruption, Dark Harvest,
   and drains. **Malediction** lets Curse of Agony coexist with another curse.
+- **Channel lengths are NOT the vanilla ones, and Rapid Deterioration scales them.**
+  Dark Harvest is 8s base, Drain Soul **6s** base (vanilla: 15s). The talent shortens the
+  channel by the same 3%/rank it takes off Corruption / Curse of Agony / Siphon Life, so at
+  2/2 they read **7.52s** and **5.64s** — both confirmed against in-game tooltips. Any code
+  reasoning about "can I fit this channel in" must scale by the rank actually taken.
 
 ## Druid
 - **Powershift Shred** dominant for Feral DPS (bleeds weaker, can't crit). **Savage Bite**

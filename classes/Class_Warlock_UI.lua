@@ -26,6 +26,7 @@ function M:BuildBody(ui, parent)
 
     L:Header("Filler and pet")
     self.fillerDD = L:Dropdown("filler", "Filler", 200, set("filler"))
+    self.gapDD = L:Dropdown("dhGapFiller", "Between channels", 200, set("dhGapFiller"))
     self.petRow = L:Row{ key = "petAttack", label = "Send pet to attack", onToggle = set("petAttack") }
     self.petMeleeRow = L:Row{ key = "petMeleeOnly", label = "Pet melee only", onToggle = set("petMeleeOnly") }
     self.nightfallRow = L:Row{ key = "nightfall", label = "Shadow Bolt on Shadow Trance", spell = "Shadow Bolt", onToggle = set("nightfall") }
@@ -65,7 +66,8 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.siphRow.cb, "Siphon Life", "Shadow damage over time that also heals you.")
     ui:Tip(self.curseDD, "Curse", "One curse per target. Curse of Agony has exact upkeep,", "others are reapplied on a timer for now.")
     ui:Tip(self.coaRow.cb, "Keep Curse of Agony up too", "Malediction lets Curse of Agony run beside your main curse but it expires sooner.", "When on, only Curse of Agony is recast as it falls off. Not used with Curse of Doom or when it already is the main curse.")
-    ui:Tip(self.fillerDD, "Filler", "Used when every enabled DoT is up.", "Wand conserves mana, Shadow Bolt and Drain Life spend it. Dark Harvest is channeled on its cooldown and wands (or Shadow Bolts) the gap in between.")
+    ui:Tip(self.fillerDD, "Filler", "Used when every enabled DoT is up.", "Wand conserves mana, Shadow Bolt and Drain Life spend it. Drain Soul is the option for a low-level warlock with no wand yet - it is a channel, so it is skipped for a press whenever a DoT would lapse while it runs. Dark Harvest is channeled on its cooldown and fills the gap in between with the choice below.")
+    ui:Tip(self.gapDD, "Between channels", "What to use while Dark Harvest is on cooldown. Only applies when Dark Harvest is your filler.", "Drain Soul is a channel, so it is only started when nothing needs you during it: no DoT about to lapse, and Dark Harvest not coming off cooldown mid-channel. When either is true the wand covers the gap instead, so the channel can never cost you a DoT or delay the next Dark Harvest.")
     ui:Tip(self.petRow.cb, "Pet attack", "Send the active pet onto your target.")
     ui:Tip(self.petMeleeRow.cb, "Pet only in melee range", "Send the pet only when the target is within melee range,", "so an accidentally targeted far enemy does not pull the pet away.")
     ui:Tip(self.nightfallRow.cb, "Shadow Bolt on Shadow Trance", "When the Nightfall proc lights up, fire the free instant Shadow Bolt.", "Auto-enabled when the Nightfall talent is detected; this toggle forces it on otherwise. Only used when the filler is not already Shadow Bolt.")
@@ -107,6 +109,7 @@ function M:RefreshBody(ui, buf)
     local fo = { { label = "Wand (Shoot)", value = "Shoot" } }
     if self:KnowsSpell("Shadow Bolt") then table.insert(fo, { label = "Shadow Bolt", value = "Shadow Bolt" }) end
     if self:KnowsSpell("Drain Life")  then table.insert(fo, { label = "Drain Life",  value = "Drain Life" })  end
+    if self:KnowsSpell("Drain Soul")  then table.insert(fo, { label = "Drain Soul",  value = "Drain Soul" })  end
     if self:KnowsSpell("Dark Harvest") then table.insert(fo, { label = "Dark Harvest", value = "Dark Harvest" }) end
     local fcur = buf.filler or "Shoot"
     local fshown, fc
@@ -114,6 +117,20 @@ function M:RefreshBody(ui, buf)
     elseif self:KnowsSpell(fcur) then fshown, fc = fcur, ui.COL.white
     else fshown, fc = fcur .. " (not learned)", ui.COL.red end
     ui:SetDropdown(self.fillerDD, fo, fcur, fshown, fc)
+
+    -- Gap filler: only meaningful while Dark Harvest is the chosen filler, so
+    -- it is greyed out otherwise rather than silently doing nothing.
+    local go = { { label = "Wand (Shoot)", value = "Shoot" } }
+    if self:KnowsSpell("Shadow Bolt") then table.insert(go, { label = "Shadow Bolt", value = "Shadow Bolt" }) end
+    if self:KnowsSpell("Drain Life")  then table.insert(go, { label = "Drain Life",  value = "Drain Life" })  end
+    if self:KnowsSpell("Drain Soul")  then table.insert(go, { label = "Drain Soul",  value = "Drain Soul" })  end
+    local gcur = buf.dhGapFiller or "Shoot"
+    local gshown, gc
+    if gcur == "Shoot" then gshown, gc = "Wand (Shoot)", ui.COL.white
+    elseif self:KnowsSpell(gcur) then gshown, gc = gcur, ui.COL.white
+    else gshown, gc = gcur .. " (not learned)", ui.COL.red end
+    if fcur ~= "Dark Harvest" then gshown, gc = gshown .. " (Dark Harvest only)", ui.COL.grey end
+    ui:SetDropdown(self.gapDD, go, gcur, gshown, gc)
 
     ui:BindCheck(self.immoRow, buf.useImmolate)
     ui:BindCheck(self.corrRow, buf.useCorruption)
@@ -152,10 +169,24 @@ function M:RefreshBody(ui, buf)
     self.dsoulRow.slider:SetValue(buf.drainSoulHp or 0);  self.dsoulRow.slider.valText:SetText((buf.drainSoulHp or 0) .. "%")
     self.shardRow.slider:SetValue(buf.shardTarget or 1);  self.shardRow.slider.valText:SetText(tostring(buf.shardTarget or 1))
     ui:SliderEnable(self.sburnRow.slider, self:KnowsSpell("Shadowburn") and buf.useShadowburn)
-    ui:SliderEnable(self.dsoulRow.slider, self:KnowsSpell("Drain Soul") and buf.useDrainSoul)
+
+    -- With Drain Soul chosen as the filler it already runs above the execute
+    -- threshold as well, so the execute finisher has nothing left to add - the
+    -- setting would sit there looking meaningful while changing nothing. Greyed
+    -- out and relabelled rather than silently ignored.
+    -- KnowsSpell-gated so an unlearned Drain Soul keeps BindCheck's own
+    -- "(not learned)" label instead of being relabelled over it.
+    local dsIsFiller = (buf.filler == "Drain Soul") and self:KnowsSpell("Drain Soul")
+    if dsIsFiller then
+        self.dsoulRow.cb:Disable()
+        self.dsoulRow.label:SetText(self.dsoulRow.baseText .. " - already the filler")
+        ui:Color(self.dsoulRow.label, ui.COL.grey)
+    end
+    ui:SliderEnable(self.dsoulRow.slider, self:KnowsSpell("Drain Soul") and buf.useDrainSoul and not dsIsFiller)
+
     -- Keeping shards is a refinement of the Drain Soul finisher, so grey it
-    -- out whenever that finisher itself is off or unlearned.
-    local dsoulOn = self:KnowsSpell("Drain Soul") and buf.useDrainSoul
+    -- out whenever that finisher itself is off, unlearned, or superseded above.
+    local dsoulOn = self:KnowsSpell("Drain Soul") and buf.useDrainSoul and not dsIsFiller
     if not dsoulOn then
         self.shardRow.cb:Disable()
         ui:Color(self.shardRow.label, ui.COL.grey)

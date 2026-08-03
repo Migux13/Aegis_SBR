@@ -26,10 +26,13 @@
 --        Shard and regen mana (the leveling finisher). Optionally capped by
 --        keepShards/shardTarget so it stops once enough shards are banked.
 --  * When nothing above applies, fall back to the filler: the wand, Shadow
---    Bolt, Drain Life, or Dark Harvest. The wand filler degrades to Shadow
---    Bolt when no wand is equipped, so a level 1 warlock (Shadow Bolt only)
---    still nukes. Dark Harvest wands (or Shadow Bolts) the gap between its
---    own cooldowns instead of leaving the rotation idle.
+--    Bolt, Drain Life, Drain Soul, or Dark Harvest. The wand filler degrades
+--    to Shadow Bolt when no wand is equipped, so a level 1 warlock (Shadow
+--    Bolt only) still nukes. Drain Soul is there for the low-level warlock
+--    with no wand yet; being a channel it stands down for a press whenever a
+--    DoT would lapse while it runs. Dark Harvest fills the gap between its own cooldowns with
+--    a configurable choice (dhGapFiller: wand, Shadow Bolt, Drain Life or
+--    Drain Soul) instead of leaving the rotation idle.
 --  * Optional Life Tap when mana is low and health is high.
 --  * Nightfall reaction: a free instant Shadow Bolt the moment Shadow Trance
 --    procs. This auto-enables when the Nightfall talent is detected (the one
@@ -194,7 +197,26 @@ local RAPID_DETERIORATION_PCT_PER_RANK = 3
 M.dotNumTicks = { ["Corruption"] = 6, ["Curse of Agony"] = 12, ["Siphon Life"] = 10 }
 
 -- Filler universe
-M.FILLERS = { "Shoot", "Shadow Bolt", "Drain Life", "Dark Harvest" }
+M.FILLERS = { "Shoot", "Shadow Bolt", "Drain Life", "Drain Soul", "Dark Harvest" }
+
+-- What fills the gap while Dark Harvest is on cooldown. Only consulted when
+-- Dark Harvest is the chosen filler; the wand stays the default because it is
+-- free. Drain Soul is here by user request (a player who does not want to wand
+-- at all) - note it is a CHANNEL, which is why DS_CHANNEL_BASE below exists.
+M.GAP_FILLERS = { "Shoot", "Shadow Bolt", "Drain Life", "Drain Soul" }
+
+-- Drain Soul's base channel length on Turtle. NOT the vanilla 15s: confirmed
+-- in-game at 5.64s with Rapid Deterioration 2/2, and 6 * 0.94 = 5.64 exactly,
+-- so the base is 6 and the talent scales it - the same relationship already
+-- established for Dark Harvest (8 -> 7.52 at the same rank). Use
+-- DSChannelLength() rather than this raw base.
+--
+-- Only used to decide whether STARTING a channel is safe, never to track a
+-- running one (the SPELLCAST_CHANNEL_* watcher does that). Two things must not
+-- happen while it runs, because the channel guard stops the rotation acting at
+-- all: a DoT lapsing unrefreshed, and Dark Harvest coming off cooldown with
+-- nobody there to press it.
+local DS_CHANNEL_BASE = 6
 
 M.templates = {
     starter = {  -- usable from level 1: the filler is the wand, which falls
@@ -263,6 +285,9 @@ function M:NormalizeProfile(c)
     if c.lifeTapMana == nil then c.lifeTapMana = 20 end
     if c.lifeTapHpMin == nil then c.lifeTapHpMin = 40 end
     if c.wandManaFloor == nil then c.wandManaFloor = 15 end
+    -- What fills the gap while Dark Harvest is on cooldown (Dark Harvest filler
+    -- only). Defaults to the wand, which is what the gap used to be hardcoded to.
+    if c.dhGapFiller == nil then c.dhGapFiller = "Shoot" end
     if c.nightfall == nil then c.nightfall = false end
     if c.drainLifeSustain == nil then c.drainLifeSustain = false end
     if c.drainLifeHp == nil then c.drainLifeHp = 35 end
@@ -418,6 +443,12 @@ function M:DHChannelLength()
     return DH_CHANNEL_BASE * (1 - self:RapidDeteriorationPct() / 100)
 end
 
+-- Drain Soul's channel length, scaled by Rapid Deterioration exactly like Dark
+-- Harvest's (see DS_CHANNEL_BASE for the in-game confirmation).
+function M:DSChannelLength()
+    return DS_CHANNEL_BASE * (1 - self:RapidDeteriorationPct() / 100)
+end
+
 -- Minimum DoT time remaining needed to survive a full Dark Harvest channel at
 -- its 30%-accelerated tick rate (see DH_TICK_BOOST above).
 function M:DHMinDotRemain()
@@ -494,21 +525,39 @@ function M:DotRemaining(spellName)
     return remain
 end
 
--- True when any enabled, tracked DoT is due to fall off within
--- WAND_STOP_BEFORE_DOT seconds (see there). A DoT with no confident estimate
--- (DotRemaining returns nil) never counts, matching the "unknown is not
--- urgent" stance used for the Dark Harvest pre-check.
-function M:DotExpiringSoon(order)
+-- True when any enabled, tracked DoT is due to fall off within `within`
+-- seconds. A DoT with no confident estimate (DotRemaining returns nil) never
+-- counts, matching the "unknown is not urgent" stance used for the Dark
+-- Harvest pre-check.
+function M:DotExpiringSoonBy(order, within)
     for i = 1, table.getn(order) do
         local sp = order[i][1]
         if self:KnowsSpell(sp) then
             local remain = self:DotRemaining(sp)
-            if remain and remain <= WAND_STOP_BEFORE_DOT then
+            if remain and remain <= within then
                 return true
             end
         end
     end
     return false
+end
+
+-- The wand's own horizon (see WAND_STOP_BEFORE_DOT).
+function M:DotExpiringSoon(order)
+    return self:DotExpiringSoonBy(order, WAND_STOP_BEFORE_DOT)
+end
+
+-- Seconds left on a spell's OWN cooldown, ignoring the global cooldown; 0 when
+-- it is ready. Needed to tell whether a long channel would still be running
+-- when Dark Harvest comes back up.
+function M:OwnCDLeft(name)
+    local slot = self:FindSpellSlot(name)
+    if not slot then return 0 end
+    local start, dur = GetSpellCooldown(slot, BOOKTYPE_SPELL)
+    if start == 0 or dur <= 1.55 then return 0 end
+    local left = start + dur - GetTime()
+    if left < 0 then left = 0 end
+    return left
 end
 
 -- Throttle memory per DoT, keyed by target GUID. Only stamped once
@@ -841,6 +890,34 @@ function M:Rotate(cfg)
             self:Queue("Dark Harvest")
             return
         end
+        -- Dark Harvest is on cooldown: fill the gap with the configured choice.
+        local gap = cfg.dhGapFiller or "Shoot"
+
+        -- Drain Soul is a channel, and the guard at the top of Rotate stops the
+        -- rotation acting for its whole length. Starting one is therefore only
+        -- safe when nothing needs attention during it: no enabled DoT may lapse,
+        -- and Dark Harvest must not come off cooldown mid-channel and sit there
+        -- unpressed. Both fall back to the wand rather than blocking the press.
+        if gap == "Drain Soul" and self:KnowsSpell("Drain Soul") then
+            local dsLen = self:DSChannelLength()
+            local dhLeft = self:OwnCDLeft("Dark Harvest")
+            local dotSafe = not self:DotExpiringSoonBy(order, dsLen)
+            if dotSafe and dhLeft >= dsLen then
+                self:Queue("Drain Soul")
+                return
+            end
+            gap = "Shoot"   -- not safe right now, ride the wand until it is
+        end
+
+        if gap == "Drain Life" and self:KnowsSpell("Drain Life") then
+            self:Queue("Drain Life")
+            return
+        end
+        if gap == "Shadow Bolt" and self:KnowsSpell("Shadow Bolt") then
+            self:Queue("Shadow Bolt")
+            return
+        end
+
         if self:HasWand() then
             if self:DotExpiringSoon(order) then
                 if self:Wanding() then CastSpellByName("Shoot") end -- toggles the repeat off
@@ -867,6 +944,22 @@ function M:Rotate(cfg)
         -- spammable wand, only start it if it is not already auto repeating
         if self:Wanding() then return end
         CastSpellByName("Shoot")
+    elseif filler == "Drain Soul" then
+        -- Same channel caution as the Dark Harvest gap filler, minus the
+        -- cooldown half: there is no Dark Harvest to be held up here, only the
+        -- DoTs, which cannot be refreshed while the channel guard is holding
+        -- the rotation. If one would lapse during it, fall through to the wand
+        -- (or Shadow Bolt without one) for this press instead.
+        if not self:DotExpiringSoonBy(order, self:DSChannelLength()) then
+            self:Queue("Drain Soul")
+            return
+        end
+        if self:HasWand() then
+            if self:Wanding() then return end
+            CastSpellByName("Shoot")
+        elseif self:KnowsSpell("Shadow Bolt") then
+            self:Queue("Shadow Bolt")
+        end
     elseif filler then
         self:Queue(filler)
     end
