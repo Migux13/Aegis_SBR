@@ -4,7 +4,7 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v1.2.0 — Rogue tuning + press log, Paladin Consecration & heal-rank fixes, Warlock fillers
+## v1.1.3 — Rogue tuning + press log, Paladin Consecration & heal-rank fixes, Warlock fillers
 
 **First code release after the v1.1.0 cut.** Four merges land here: Rogue tuning with a
 development press log (#30), a Paladin Consecration opt-out plus a creature-type cache
@@ -61,6 +61,12 @@ opt-in and default-off, or a correction to a *value* the existing list already u
   QuickHeal's stated formula rather than derived.
 - **Creature type is now cached per target** instead of calling `UnitCreatureType` on every
   press — `TargetIsUndeadOrDemon()` sits in the hot path and a target's type never changes.
+- *Not shipped:* a `holyLightPct` health-percentage gate for the same Flash of Light problem
+  (#32) was **closed unmerged** in favour of the fix above. It treated the symptom rather
+  than the cause, and pointed the opposite way to QuickHeal, which reserves *Flash of Light*
+  for units in real danger rather than reserving Holy Light for them. Whether a slider is
+  wanted at all — and which direction it should point — is worth re-measuring in game now
+  that the rank estimate is correct.
 
 ### Warlock
 
