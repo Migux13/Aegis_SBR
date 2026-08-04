@@ -6,6 +6,15 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ## v1.1.0 — Release: README overhaul, dependency accuracy pass
 
+**Warlock Rotation & Filler Upgrades**
+
+• **Custom "Between Channels" Filler:** When using Dark Harvest as your filler, you can now customize what spell fills the gap while it's on cooldown. Choose between **Shoot (Wand)**, **Shadow Bolt**, **Drain Life**, or **Drain Soul**!
+• **Drain Soul as Main Filler:** Drain Soul can now be selected directly as your primary filler spell in the class dropdown menu.
+• **Smart Channel Safeguards:** The rotation now intelligently tracks channel durations alongside your active DoTs and cooldowns. It won't start channeling if a DoT is about to expire or if Dark Harvest is coming ready mid-channel, ensuring maximum DoT uptime and seamless cooldown usage.
+• **Cleaned-Up Execute UI:** When Drain Soul is selected as your main filler, the Execute setting automatically greys out to reflect that it's already active, keeping your UI clean while preserving your saved settings.
+
+---
+
 **Docs-only release cut.** No rotation or engine code changed since v0.16.2 — this version
 marks the README reaching release quality: restructured, verified against the actual
 dependency stack, and carrying the project's real community links.
