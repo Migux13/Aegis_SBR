@@ -4,7 +4,71 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v1.1.0 — Release: README overhaul, dependency accuracy pass
+## v1.1.3 — Rogue tuning + press log, Paladin Consecration & heal-rank fixes, Warlock fillers
+
+**First code release after the v1.1.0 cut.** Four merges land here: Rogue tuning with a
+development press log (#30), a Paladin Consecration opt-out plus a creature-type cache
+(#31), a Paladin downranked-heal estimate fix (#33), and the Warlock filler upgrades (#34).
+No priority ORDER changed in any class — every rotation-affecting item below is either
+opt-in and default-off, or a correction to a *value* the existing list already used.
+
+### Rogue
+
+- **Buff-renew window is now a per-profile slider (0–2s, default 1)** in place of the old
+  hard-coded 5s. That 5 was sized for an era when the remaining time on Slice and Dice /
+  Envenom was *estimated*; reading the real timer removed the reason for the padding, so the
+  old value was throwing away up to 4s of buff — and the combo points that bought it — on
+  every refresh. The new default is measured, not guessed: a two-minute press log showed an
+  average 0.64s left at refresh, Slice and Dice never dropped, and Envenom lapsed three times
+  for ~2.4s total (≈2% downtime). Set it to **0** to refresh only once a buff has actually
+  lapsed; the test is `<=`, and the UI reads the field without an `or` fallback, so a
+  deliberate 0 is never silently turned back into 1.
+- **Cold Blood** (*opt-in, default OFF*). When enabled it fires in the **same press**,
+  immediately before Eviscerate — deliberately not a priority step of its own, because the
+  buff is consumed by whatever you cast next, and that would usually be a builder (Noxious
+  Assault included) rather than the finisher it was saved for. Costs no GCD (confirmed in
+  game), and it is gated on your **Finisher CP** setting so the 3-minute cooldown isn't
+  spent on the low-CP execute finisher. Adds a `cb=` field to the rogue trace line.
+- **`docs/turtle-mechanics.md` gains a Rogue section** recording what Turtle actually does:
+  all three upkeep finishers cost **20 energy** (not vanilla's 25/35), the real Slice and
+  Dice / Rupture / Envenom duration tables, and **Improved Blade Tactics** — Turtle's Slice
+  and Dice duration talent (+45% at 3/3), whose tooltip shows only the *base* duration, so a
+  talented Slice and Dice actually runs 13.05–30.45s. Also a measured dungeon damage split
+  (Instant Poison 66.2%, auto-attack 13.8%, Noxious Assault 10.9%, Eviscerate 7.5%,
+  Rupture 0.8%) for future tuning arguments.
+
+### Paladin
+
+- **Consecration can now opt out of the mana-recovery hold** (*Consecrate in mana mode*,
+  default OFF — behaviour is unchanged unless you turn it on). The recovery flag **latches**:
+  it switches on below your *Mana low* threshold and only switches off again at *Mana high*,
+  so a wide band (a tank on 60/90, say) can keep it on for an entire fight with mana sitting
+  comfortably in between. Nothing in the UI surfaces that state, so the symptom was
+  Consecration reading as "off cooldown, full mana, still never casts" — found in a live
+  protection profile. The toggle exempts Consecration alone; Exorcism deliberately keeps the
+  old behaviour, being the far more expensive spell. The tooltip explains the latch.
+- **Downranked Holy Light no longer scales with +healing as if the low-rank penalty didn't
+  exist.** Ranks learnt below level 20 receive only `1 - (20 - levelLearnt) * 0.0375` of the
+  gear bonus, and the estimate applied the full coefficient to every rank — an error that
+  grows with gear, which is exactly where it hurts. At a routine +900 healing, Holy Light
+  rank 1 was estimated at 693 and actually landed ~235 (3.0× over), rank 2 at 726 vs ~388,
+  rank 3 at 816 vs ~671. Since the rank picker takes the **smallest** rank whose estimate
+  covers the deficit, an inflated low rank wins outright: a 600 deficit picked rank 1
+  expecting 693 and healed ~235. It also fed the Flash of Light vs Holy Light comparison, so
+  this partly explains the community report that Holy Light crowds out Flash of Light above
+  the emergency line. Only Holy Light needs the correction (ranks 1/2/3 come at level 1/6/14;
+  Flash of Light starts at 20 and Holy Shock at 40, both at a factor of 1). Verified against
+  QuickHeal's stated formula rather than derived.
+- **Creature type is now cached per target** instead of calling `UnitCreatureType` on every
+  press — `TargetIsUndeadOrDemon()` sits in the hot path and a target's type never changes.
+- *Not shipped:* a `holyLightPct` health-percentage gate for the same Flash of Light problem
+  (#32) was **closed unmerged** in favour of the fix above. It treated the symptom rather
+  than the cause, and pointed the opposite way to QuickHeal, which reserves *Flash of Light*
+  for units in real danger rather than reserving Holy Light for them. Whether a slider is
+  wanted at all — and which direction it should point — is worth re-measuring in game now
+  that the rank estimate is correct.
+
+### Warlock
 
 **Warlock Rotation & Filler Upgrades**
 
@@ -13,7 +77,37 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 • **Smart Channel Safeguards:** The rotation now intelligently tracks channel durations alongside your active DoTs and cooldowns. It won't start channeling if a DoT is about to expire or if Dark Harvest is coming ready mid-channel, ensuring maximum DoT uptime and seamless cooldown usage.
 • **Cleaned-Up Execute UI:** When Drain Soul is selected as your main filler, the Execute setting automatically greys out to reflect that it's already active, keeping your UI clean while preserving your saved settings.
 
+### Development tooling
+
+- **`/sbr log on|off|clear` — a press log to file.** Records one line per rotation press into
+  a new `AegisLog` saved variable, written to `WTF\...\SavedVariables\Aegis_SBR.lua` on
+  `/reload` or logout. The 1.12 sandbox has no file access whatsoever — no `io`, no `os`, and
+  neither SuperWoW nor Nampower adds any — so a saved variable is the only route to get a
+  trace off the client for analysis. Kept **out of `AegisDB`** so a large log can never bloat
+  or endanger profile data, and so it can be cleared on its own. Built as a true ring buffer
+  (wrapping write index, 2000 lines) rather than append-and-trim, because `table.remove(t, 1)`
+  would shift every entry on every press, inside the rotation's hot path; each line carries a
+  timestamp relative to the log start so ordering survives the wrap.
+- **Trace-guard fix — the part that made the log actually work.** Every class module builds
+  its trace string behind `if self.trace then`, to skip the concatenation when nobody is
+  listening, so hooking the log inside `Trace()` was dead code unless the chat trace happened
+  to be on as well. New `Aegis_SBR:Tracing()` (true when chat trace **or** logging is active)
+  now backs all 18 guards. It only affects *when the string is built* — no rotation behaviour
+  changes.
+- Chat trace and the log stay independent: the chat line keeps its 0.4s throttle so it stays
+  readable while playing, while the log takes **every** press, since a throttled sample would
+  bias exactly the distributions it exists to measure. Only the first trace line is logged —
+  the supplementary ones (the rogue's `rank: ...`, for instance) are static for a whole
+  session and were doubling both file size and ring slots for nothing.
+- Zero footprint if unused: `AegisLog` is created lazily on the first `/sbr log on` and never
+  at load, so a player who never touches the command never carries the variable, and entries
+  are dropped one load after logging is switched off. `log` is intentionally left out of the
+  `/sbr` command list — it's a development aid, to hand out on request when diagnosing a
+  report.
+
 ---
+
+## v1.1.0 — Release: README overhaul, dependency accuracy pass
 
 **Docs-only release cut.** No rotation or engine code changed since v0.16.2 — this version
 marks the README reaching release quality: restructured, verified against the actual
