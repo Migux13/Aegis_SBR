@@ -304,6 +304,32 @@ function M:NeedSunder(cfg)
 end
 
 -- ============================================================
+-- Bleed immunity
+-- ============================================================
+-- Mechanical and Elemental targets cannot be bled, so Rend never lands on them.
+-- Without this test the Rend gate below reads "the debuff is not on the target"
+-- forever and re-attempts it on EVERY press, burning a GCD and the rage each
+-- time. Cached per target id the same way the paladin caches creature type
+-- (Class_Paladin.lua): a mob's type never changes, so this costs one API call
+-- per target rather than one per press, and keying on the id (GUID based) means
+-- a target swap re-reads at once instead of answering from a stale cache.
+--
+-- An UNKNOWN type must ALLOW the cast: UnitCreatureType returns nil for some
+-- units, and failing open only risks the behaviour we already have today, while
+-- failing closed would silently disable Rend against ordinary mobs. Note the
+-- comparison is against English strings - UnitCreatureType is localised, so this
+-- degrades to "never immune" on a non-enUS client, which is the safe direction.
+function M:TargetIsBleedImmune()
+    local id = Aegis_SBR:TargetId()
+    if id ~= self.bleedTypeId then
+        local t = UnitCreatureType("target")
+        self.bleedTypeId = id
+        self.bleedImmune = (t == "Mechanical" or t == "Elemental")
+    end
+    return self.bleedImmune
+end
+
+-- ============================================================
 -- Rotation
 -- ============================================================
 function M:Rotate(cfg)
@@ -328,12 +354,28 @@ function M:Rotate(cfg)
             .. " elite=" .. (isElite and "Y" or "N"))
     end
 
+    -- Is a Charge opener pending? Resolved HERE, before the off-GCD layer,
+    -- because Bloodrage has to know about it. Bloodrage flags us in combat and
+    -- the Charge gate below is `not inCombat`, so firing Bloodrage on a pull
+    -- press does not merely go first - it disqualifies Charge for the rest of
+    -- the pull, which reads in game as "Charge never fires even in range".
+    -- (They also both issue a CastSpellByName in the same frame, which is
+    -- unreliable in 1.12 - a later call can override an earlier one.)
+    -- Holding Bloodrage for the one press costs nothing: Charge generates rage
+    -- by itself, and Bloodrage is still there the moment we land.
+    -- Stance is deliberately NOT part of this test - while we are dancing to
+    -- Battle the opener is still pending, so Bloodrage must keep waiting.
+    local chargePending = cfg.useCharge and self:KnowsSpell("Charge") and not inCombat
+        and UnitExists("target") and UnitCanAttack("player", "target")
+        and not UnitIsDeadOrGhost("target") and not self:InMeleeRange()
+
     -- ----------------------------------------------------------------
     -- 0. Off-GCD / on-next-swing layer (fire and continue, no return)
     -- ----------------------------------------------------------------
-    -- 0a. Bloodrage to keep rage flowing (works out of combat for pulls).
-    if cfg.useBloodrage and self:KnowsSpell("Bloodrage") and self:IsReady("Bloodrage")
-        and rage < (cfg.bloodrageRage or 30) then
+    -- 0a. Bloodrage to keep rage flowing (works out of combat for pulls), but
+    --     never while a Charge opener is pending - see chargePending above.
+    if cfg.useBloodrage and not chargePending and self:KnowsSpell("Bloodrage")
+        and self:IsReady("Bloodrage") and rage < (cfg.bloodrageRage or 30) then
         CastSpellByName("Bloodrage")
     end
 
@@ -387,9 +429,7 @@ function M:Rotate(cfg)
     --     with an attackable target. Stance-dances to Battle if enabled and
     --     needed. Charge itself is blocked by the client once you are in
     --     combat, so this naturally stops applying after the pull.
-    if cfg.useCharge and self:KnowsSpell("Charge") and not inCombat
-        and UnitExists("target") and UnitCanAttack("player", "target")
-        and not UnitIsDeadOrGhost("target") and not self:InMeleeRange() then
+    if chargePending then
         if self:InStance("Battle Stance") then
             if self:IsReady("Charge") then
                 if self:Cast("Charge") then return end
@@ -467,8 +507,11 @@ function M:Rotate(cfg)
 
     -- 1d2. Rend bleed upkeep (toggle; a leveling tool, off by default). Battle
     --      or Defensive stance, applied only when the bleed is not already on
-    --      the target. Skipped in the execute phase so rage funnels to Execute.
+    --      the target. Skipped in the execute phase so rage funnels to Execute,
+    --      and skipped entirely on bleed-immune targets, where the debuff can
+    --      never land and the "not up" test would otherwise re-cast forever.
     if cfg.useRend and not inExecute and self:KnowsSpell("Rend")
+        and not self:TargetIsBleedImmune()
         and self:CanCast("Rend", RAGE["Rend"], STANCE_REQ["Rend"])
         and not Aegis_SBR:TargetDebuffUp("Rend", "ability_rend") then
         if self:Cast("Rend") then return end
