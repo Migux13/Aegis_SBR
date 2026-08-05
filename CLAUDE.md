@@ -61,7 +61,7 @@ execute finisher and a Paladin double-heal fix (v0.16.0), and an opt-in Warrior 
 Strike (v0.16.2, Arms talent, off by default). Off-hand imbue, poison auto-apply beyond
 the Quick Bar, and Shaman totem-destruction detection remain open Phase 2 items.
 v1.1.0 was a docs-only cut (README overhaul + a `docs/research-classicapi.md` deep-dive);
-no rotation/engine code changed in it. **v1.1.3 is the current release** — the first code
+no rotation/engine code changed in it. v1.1.3 was the first code
 cut after it, folding in four merges: Rogue buff-renew slider + opt-in Cold Blood and the
 `/sbr log` press log (#30), a Paladin Consecration mana-recovery opt-out + creature-type
 cache (#31), the sub-level-20 +healing penalty applied to downranked Holy Light (#33), and
@@ -69,6 +69,16 @@ the Warlock filler upgrades — Drain Soul as a main filler and a configurable D
 gap filler (#34). No priority ORDER changed in any of them. PR **#32** (a `holyLightPct`
 health gate for the same Flash of Light problem) was **closed unmerged**, superseded by #33
 — don't treat it as shipped; whether a slider is wanted, and which way it points, is open.
+**v1.1.4 is the current release** — two approved Warrior fixes from play reports: Bloodrage
+now holds while a Charge opener is pending (it flags combat, and Charge's gate is
+`not inCombat`, so it was *disqualifying* Charge for the whole pull, not merely going
+first), and Rend is gated on a cached `TargetIsBleedImmune()` so it stops re-firing every
+press at Mechanical/Elemental mobs. No priority ORDER changed. **Open Warrior item:** a
+report that Overpower is passed over for Slam/Heroic Strike — it already sits ABOVE both in
+the list, so the cause is elsewhere (likeliest: the Battle Stance gate at
+`Class_Warrior.lua:422` when `cfg.stanceDance` is off, or `overpowerExpiry` being zeroed at
+`:423` *before* a cast that then fails — Revenge has the same bug at `:407`). Awaiting a
+`/sbr log` capture; the Warrior trace already carries an `op=Y/N` field for exactly this.
 
 ## Tech Stack / Hard Constraints (WHAT — read carefully, these bite)
 - **Language: Lua 5.0** (Turtle 1.12 client). Non-negotiable:

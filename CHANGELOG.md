@@ -4,6 +4,40 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.1.4 — Warrior: Charge no longer lost to Bloodrage, Rend stops on bleed-immune targets
+
+**Two Warrior fixes, both reported from play and both approved before the change.** No
+priority ORDER was altered: one removes a *disqualification*, the other adds a *gate*.
+
+- **Charge is no longer killed by Bloodrage on the pull.** Bloodrage sits in the off-GCD
+  layer and fired on any pull press where rage was under the threshold — and out of combat
+  rage is always 0, so it fired on *every* pull press. That didn't merely go first: Bloodrage
+  puts you in combat, and the Charge gate is `not inCombat`, so from the next press onward
+  Charge was unreachable for the whole pull. The symptom in game was Charge never firing even
+  at perfect range. (The two also both issued a `CastSpellByName` in the same frame, which is
+  unreliable on 1.12 — a later call can override an earlier one.) Bloodrage now holds while a
+  Charge opener is pending, which costs nothing: **Charge generates the rage itself**, and
+  Bloodrage is still available the moment you land. The hold deliberately persists while
+  stance-dancing to Battle, since the opener is still pending during the dance.
+- **Rend is no longer spammed at targets that cannot bleed.** Mechanical and Elemental mobs
+  are immune, so the debuff never lands, so the "not already on the target" test stayed true
+  and Rend was re-attempted on **every press** — a wasted GCD and 10 rage each time, for the
+  whole fight. Rend now checks creature type first, cached per target id on the pattern the
+  Paladin already uses for Exorcism (one API call per target, not per press; a target swap
+  re-reads immediately rather than answering stale). An **unknown** creature type still allows
+  the cast — `UnitCreatureType` returns nil for some units, and failing open is only today's
+  behaviour, where failing closed would silently disable Rend against ordinary mobs.
+  *Localisation note:* the check compares English strings, so on a non-enUS client it
+  degrades to "never immune" — the safe direction, but it means the fix is enUS-only for now.
+
+*Still open in the Warrior module:* an Overpower report (the proc being passed over for Slam
+and Heroic Strike) is **not** addressed here. Overpower already sits above the strikes and
+Slam in the priority list, so the cause is something else — most likely the Battle Stance
+gate with stance-dancing off, or the proc window being cleared before a failed cast. Awaiting
+a `/sbr log` capture to tell those apart rather than guessing at a hand-tuned list.
+
+---
+
 ## v1.1.3 — Rogue tuning + press log, Paladin Consecration & heal-rank fixes, Warlock fillers
 
 **First code release after the v1.1.0 cut.** Four merges land here: Rogue tuning with a
