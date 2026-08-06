@@ -204,7 +204,12 @@ def check_ordering(path):
             # dline inside (start, end] is the body's own inner local (in scope
             # when the body runs); only a def past the body's end is a genuine
             # file-order forward reference.
-            if dline > end and re.search(r'\b' + re.escape(ident) + r'\s*\(', body):
+            # The lookbehind stops a dotted/colon field access from reading as a
+            # call to a bare local of the same name: `\bsub\s*\(` happily matched
+            # `string.sub(`, because \b matches between the dot and the s. Any
+            # local sharing a name with a stdlib function (sub, find, insert,
+            # format...) would otherwise produce a false ordering failure.
+            if dline > end and re.search(r'(?<![.:\w])' + re.escape(ident) + r'\s*\(', body):
                 issues.append(f"    '{name}' (line {start}) calls '{ident}' "
                               f"defined later (line {dline})")
 

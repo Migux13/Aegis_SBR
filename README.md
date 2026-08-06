@@ -1,4 +1,4 @@
-# Aegis: Single Button Rotation (v1.1.5)
+# Aegis: Single Button Rotation (v1.1.6)
 
 **One button. Your whole rotation.**
 
@@ -241,7 +241,7 @@ Reworked for Turtle WoW 1.18.1's hunter changes, with **Auto**, **Ranged**, and 
 * **Ranged (BM / MM):** Built around the **Auto Shot** backbone with **Steady Shot** (baseline at 20) woven 1:1 after each shot — gated on the exact Auto Shot timing from SuperWoW's `UNIT_CASTEVENT` (interval fallback) so mashing never clips or starves it. *Arcane Shot* / *Multi-Shot* weave as instants. Auto Shot is kept *running* and now **self-unsticks**: if a shot is detected to have stalled it is restarted automatically, instead of needing a manual target swap. Starting Auto Shot is its own press, so it no longer blocks a same-press **Hunter's Mark** or **Sting**.
 * **Lock and Load (MM capstone):** *Aimed Shot* is **not** hard-cast on cooldown (that clips Auto Shot). Instead the rotation watches for the **Lock and Load** buff — a crit from Steady/Aimed/Arcane that resets Aimed Shot, drops its cast time, and makes it cleave a line — and fires *Aimed Shot* the instant it procs. A toggle lets you also cast it on cooldown if you prefer.
 * **Melee (Survival / BM-melee):** Keeps **Aspect of the Wolf** up, starts melee swings, and runs the priority **Mongoose Bite** (reactively in the window after you dodge) → **Lacerate** (maintained bleed) → **Raptor Strike** on cooldown → optional *Wing Clip*. Under `/sbr aoe` it leads with **Carve** (the Survival cone cleave, up to 5 targets). Survival can drop **Immolation Trap** on cooldown (Patch 1.18.1 allows traps in combat). The mana-aspect swap to *Viper* works here too — a mana-heavy melee hunter drops to Viper at your lower threshold and swaps back to Wolf at your upper one.
-* **Range-Correct Upkeep:** **Hunter's Mark** is maintained in *both* modes (a universal damage-amp debuff). A **Sting** (*Serpent*, *Scorpid*, *Viper*, the smart **Viper > Serpent** mode, or none — panel or `/sbr sting`) is a ranged shot, gated on *actual distance*: it lands on the pull while the target is still out of melee — so even a pure **melee** hunter opens with **Hunter's Mark + Serpent Sting** — and then stops once you close in. Both are applied once per target and refreshed exactly when they fall off (SuperWoW spell-id detection). Stings are Poison-school, so they **auto-skip poison-immune mobs** — *Mechanicals* and *Elementals* are skipped by creature type (no wasted cast), and immune *Undead* / bosses are learned after a single cast and then skipped for that fight.
+* **Range-Correct Upkeep:** **Hunter's Mark** leads the whole rotation — it is the first thing the hunter does to a target, ahead of even aspect upkeep, and nothing else is cast until it is on. It costs a press only *once* per target, so the aspect follows immediately after. Maintained in *both* modes (a universal damage-amp debuff). A **Sting** (*Serpent*, *Scorpid*, *Viper*, the smart **Viper > Serpent** mode, or none — panel or `/sbr sting`) is a ranged shot, gated on *actual distance*: it lands on the pull while the target is still out of melee — so even a pure **melee** hunter opens with **Hunter's Mark + Serpent Sting** — and then stops once you close in. Both are applied once per target and refreshed exactly when they fall off (SuperWoW spell-id detection). Stings are Poison-school, so they **auto-skip poison-immune mobs** — *Mechanicals* and *Elementals* are skipped by creature type (no wasted cast), and immune *Undead* / bosses are learned after a single cast and then skipped for that fight.
 * **Smart Sting (`Viper > Serpent`):** One sting setting that reads the target — *Viper Sting* against anything with a mana bar (draining casters), *Serpent Sting* for everything else. Pick it in the panel or with `/sbr sting smart`.
 * **No Errant Pulls:** Being a ranged class, the Hunter does **not** auto-acquire a target — it will not grab and pull a random nearby mob, so you always choose what you are shooting.
 * **Aspect Management:** Keeps your combat aspect (Hawk ranged / Wolf melee) up, and can **swap to Aspect of the Viper** when mana runs low, swapping back once you've recovered. Both edges are **your own sliders** — *Viper below* (e.g. 20%) and *Back to combat at* (e.g. 70%) — so you choose how deep the drain goes and how full you refill before returning to DPS. A guard keeps the upper value above the lower one so the aspect can never flap between the two.
@@ -363,7 +363,7 @@ alias from the AutoRota era, so old macros keep functioning.
 |---|---|---|
 | `/sbr mode <…>` | Hunter · Shaman · Mage | Playstyle/spec — `auto/ranged/melee` · `enhancement/elemental/tank/resto` · `frost/fire/arcane` |
 | `/sbr aoe` | Warrior · Paladin · Druid · Hunter · Mage | Toggle AoE mode |
-| `/sbr spell <alias> <on/off>` | Warrior · Hunter | Flip one ability on the active profile (Paladin: `/sbr spell <profile> <alias> <on/off>`) |
+| `/sbr spell <alias> [on/off]` | Warrior · Hunter | Flip one ability on the active profile. **With no `on`/`off` it toggles**, like `/sbr aoe` — so a single keybind turns an ability on and off, and prints the new state each press. Pass `on` or `off` to force a state instead (useful in a macro that must be idempotent). Paladin form: `/sbr spell <profile> <alias> [on/off]` |
 | `/sbr cd <on/elite/off>` | Warrior · Hunter | Cooldown usage mode |
 | `/sbr heal <on/off>` | Paladin · Priest | Toggle heal mode |
 | `/sbr healat <1-100>` | Paladin · Priest | Heal group members below this % health |
@@ -393,7 +393,11 @@ alias from the AutoRota era, so old macros keep functioning.
 
 **Hunter** — `mark`/`hm`, `steady`/`st`, `arcane`/`as`, `multi`/`ms`, `aimed`/`aim`,
 `volley`, `trap`/`immolation`, `raptor`/`rs`, `mongoose`/`mb`, `lac`/`lacerate`, `carve`,
-`wc`/`wingclip`, `aspect`, `kc`/`killcommand`, `baited`, `mend`
+`wc`/`wingclip`, `opener`/`aimedopener`, `aspect`, `kc`/`killcommand`, `baited`, `mend`
+
+> **Toggling Hunter's Mark:** `/sbr spell mark` (or `/sbr spell hm`). Bind that to a key and
+> each press flips it, reporting `Hunters Mark on.` / `Hunters Mark off.` in chat — the same
+> feel as `/sbr aoe`. `/sbr spell mark on` and `/sbr spell mark off` still set it absolutely.
 
 **Paladin seals** — `sotc`/`crusader`, `sor`/`righteousness`, `soc`/`command`,
 `sow`/`wisdom`, `sol`/`light`, `none`

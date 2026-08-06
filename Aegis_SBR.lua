@@ -16,7 +16,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.1.5",
+    ver = "1.1.6",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -548,6 +548,23 @@ function Aegis_SBR:ToggleArg(current, arg)
     if a == "on" then return true end
     if a == "off" then return false end
     return nil
+end
+
+-- Turn a config key into something worth printing: "useHuntersMark" -> "Hunters
+-- Mark". Derived rather than kept in a lookup table because there are 47 spell
+-- toggles across the three classes that have the command, and a table would be
+-- one more place to forget when an ability is added. gsub (not match/gmatch,
+-- which 5.0 lacks) is assigned to a local first so its second return, the
+-- replacement count, cannot leak into a concatenation at the call site.
+function Aegis_SBR:SpellLabel(key)
+    local s = string.gsub(key or "", "^use", "")
+    s = string.gsub(s, "(%l)(%u)", "%1 %2")
+    if s == "" then return key or "" end
+    -- Explicit sub/upper rather than a gsub with a function replacement: the
+    -- paladin's keys carry no "use" prefix ("holyStrike"), so they arrive here
+    -- starting lowercase and need capitalising, and this form does not depend on
+    -- 5.0 accepting a function as the replacement argument.
+    return string.upper(string.sub(s, 1, 1)) .. string.sub(s, 2)
 end
 
 -- ============================================================

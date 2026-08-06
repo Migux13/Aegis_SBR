@@ -596,7 +596,7 @@ function M:CmdSpell(alias, onoff)
         return
     end
     cfg[key] = v
-    msgOut(key .. " = " .. (cfg[key] and "on" or "off") .. " (active profile).")
+    msgOut(Aegis_SBR:SpellLabel(key) .. " " .. (cfg[key] and "on" or "off") .. ".")
 end
 
 function M:HandleCommand(cmd, t)

@@ -1175,7 +1175,7 @@ function M:CmdSpell(name, alias, onoff)
         return
     end
     cfg.spells[key] = v
-    msgOut("'" .. name .. "' " .. key .. " = " .. (cfg.spells[key] and "on" or "off") .. ".")
+    msgOut("'" .. name .. "' " .. Aegis_SBR:SpellLabel(key) .. " " .. (cfg.spells[key] and "on" or "off") .. ".")
 end
 
 -- Quick AoE toggle: flips Consecration on the active profile, for binding to
