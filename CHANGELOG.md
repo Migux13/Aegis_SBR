@@ -4,6 +4,30 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.1.5 — `/sbr spell <name>` now toggles instead of silently switching off
+
+**Command fix, all classes that have the command (Hunter, Warrior, Paladin).** No rotation
+logic touched — this is purely how the command reads its argument.
+
+- **`/sbr spell <alias>` with no on/off argument now TOGGLES**, the way `/sbr aoe` and the
+  other bare commands already do. Previously the argument was read as
+  `(onoff or "") == "on"`, which sent *every* unrecognised argument — including the empty
+  one — to **false**. So a bare `/sbr spell mark` did not toggle Hunter's Mark: it turned it
+  **off**, every time, whatever the previous state, and then reported "off" as though that
+  was what you had asked for. Pressing it twice looked identical to pressing it once, which
+  is what made it read as "only enables, never disables" from a keybind.
+- **A mistyped argument no longer silently disables the spell.** `/sbr spell mark of` used to
+  be indistinguishable from `off`; it now prints usage and changes nothing.
+- **Explicit `on` / `off` behave exactly as before**, so any macro that passes one stays
+  idempotent however often it fires — worth keeping for a macro you want to force a state
+  rather than flip it.
+- Applies to **every** spell alias on each class, not just Hunter's Mark — it is one shared
+  command (17 toggles on Hunter, 23 on Warrior, 7 on the Paladin's per-profile form
+  `/sbr spell <profile> <alias>`). The parsing now lives in one place,
+  `Aegis_SBR:ToggleArg`, rather than three copies of the same faulty expression.
+
+---
+
 ## v1.1.4 — Warrior: Charge no longer lost to Bloodrage, Rend stops on bleed-immune targets
 
 **Two Warrior fixes, both reported from play and both approved before the change.** No

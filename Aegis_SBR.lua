@@ -16,7 +16,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.1.4",
+    ver = "1.1.5",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -527,6 +527,27 @@ function Aegis_SBR:Tokenize(msg)
     local t = {}
     for w in string.gfind(msg or "", "%S+") do table.insert(t, w) end
     return t
+end
+
+-- Resolve an on/off command argument against the value it is changing.
+--   (no argument) -> toggle, matching /sbr aoe and the other bare commands,
+--                    which is what a keybind needs: one binding, both ways.
+--   on / off      -> set absolutely, so a macro that passes one stays
+--                    idempotent however often it fires.
+--   anything else -> nil, so the caller can print usage and change NOTHING.
+-- That last case is the bug this replaces: the old `(onoff or "") == "on"` sent
+-- every unrecognised argument to FALSE, so both a bare `/sbr spell mark` and a
+-- typo like `/sbr spell mark of` silently DISABLED the spell you were trying to
+-- turn on, and reported it as though you had asked for that.
+--
+-- Callers must test the result with `== nil`, never `if not v` - false is a
+-- legitimate return here and would otherwise be mistaken for the error case.
+function Aegis_SBR:ToggleArg(current, arg)
+    local a = string.lower(arg or "")
+    if a == "" then return not current end
+    if a == "on" then return true end
+    if a == "off" then return false end
+    return nil
 end
 
 -- ============================================================
