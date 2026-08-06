@@ -1168,8 +1168,14 @@ function M:CmdSpell(name, alias, onoff)
     if not cfg then msgOut("profile not found.", 1, 0.5, 0.3); return end
     local key = self.spellAlias[string.lower(alias or "")]
     if not key then msgOut("unknown spell alias.", 1, 0.5, 0.3); return end
-    cfg.spells[key] = (string.lower(onoff or "") == "on")
-    msgOut("'" .. name .. "' " .. key .. " = " .. (cfg.spells[key] and "on" or "off") .. ".")
+    -- `== nil` on purpose: false is a valid result and must not read as an error.
+    local v = Aegis_SBR:ToggleArg(cfg.spells[key], onoff)
+    if v == nil then
+        msgOut("usage: /sbr spell " .. name .. " " .. string.lower(alias) .. " [on|off] - no argument toggles.", 1, 0.5, 0.3)
+        return
+    end
+    cfg.spells[key] = v
+    msgOut("'" .. name .. "' " .. Aegis_SBR:SpellLabel(key) .. " " .. (cfg.spells[key] and "on" or "off") .. ".")
 end
 
 -- Quick AoE toggle: flips Consecration on the active profile, for binding to

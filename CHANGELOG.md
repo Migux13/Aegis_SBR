@@ -4,6 +4,64 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.1.6 — Hunter's Mark leads the rotation; readable toggle messages
+
+**Approved priority change (Hunter) + command polish.**
+
+- **Hunter's Mark now leads everything**, ahead of aspect upkeep — the first thing the hunter
+  does to a target, with nothing else cast until it lands. *(Approved priority-order change;
+  it is the only ORDER move in this version.)* It sits above the aspect on purpose: Mark
+  costs a press exactly **once per target** — `MaintainDebuff` stops consuming the press the
+  moment the debuff is up — whereas the aspect is upkeep that loses nothing by waiting one
+  press, the mana swap to *Viper* included, since that is a threshold rather than a deadline.
+  The off-GCD layer (pet attack, taunt, burst cooldowns, Kill Command) still runs first
+  because it is fire-and-continue and never eats the press.
+  **Auto Shot ordering is deliberately unchanged** — the *Aimed Shot* opener remains the
+  designed pull action, and it is gated on Auto Shot not having started, so moving Auto Shot
+  ahead of it would have silently disqualified it for the whole pull.
+- **Toggle messages now name the ability, not the config key.** `/sbr spell mark` prints
+  `Hunters Mark on.` instead of `useHuntersMark = on (active profile).`, matching the
+  `/sbr aoe` feel — bind it to a key, press it, read the state. Labels are derived from the
+  key (strip `use`, split camel case, capitalise) rather than kept in a lookup table, because
+  there are **47** spell toggles across the three classes with the command and a table would
+  be one more place to forget when an ability is added.
+- **README:** the `/sbr spell` row now documents that the on/off argument is **optional and
+  toggles when omitted**, with a callout giving the Hunter's Mark command explicitly
+  (`/sbr spell mark`, or `/sbr spell hm`). The Hunter section records Mark's new lead
+  position, and the missing `opener`/`aimedopener` alias was added to the Hunter alias list.
+- **`scripts/verify.py`: fixed a false ordering failure.** The forward-reference check used
+  `\b<name>\s*\(`, and `\b` matches between a dot and a letter — so `string.sub(` registered
+  as a call to a local named `sub`, and any local sharing a name with a stdlib function
+  (`sub`, `find`, `insert`, `format`…) could fail the audit for no reason. The pattern now
+  refuses a dotted or colon-qualified match. Genuine forward references are still caught
+  (verified against a deliberately broken file).
+
+---
+
+## v1.1.5 — `/sbr spell <name>` now toggles instead of silently switching off
+
+**Command fix, all classes that have the command (Hunter, Warrior, Paladin).** No rotation
+logic touched — this is purely how the command reads its argument.
+
+- **`/sbr spell <alias>` with no on/off argument now TOGGLES**, the way `/sbr aoe` and the
+  other bare commands already do. Previously the argument was read as
+  `(onoff or "") == "on"`, which sent *every* unrecognised argument — including the empty
+  one — to **false**. So a bare `/sbr spell mark` did not toggle Hunter's Mark: it turned it
+  **off**, every time, whatever the previous state, and then reported "off" as though that
+  was what you had asked for. Pressing it twice looked identical to pressing it once, which
+  is what made it read as "only enables, never disables" from a keybind.
+- **A mistyped argument no longer silently disables the spell.** `/sbr spell mark of` used to
+  be indistinguishable from `off`; it now prints usage and changes nothing.
+- **Explicit `on` / `off` behave exactly as before**, so any macro that passes one stays
+  idempotent however often it fires — worth keeping for a macro you want to force a state
+  rather than flip it.
+- Applies to **every** spell alias on each class, not just Hunter's Mark — it is one shared
+  command (17 toggles on Hunter, 23 on Warrior, 7 on the Paladin's per-profile form
+  `/sbr spell <profile> <alias>`). The parsing now lives in one place,
+  `Aegis_SBR:ToggleArg`, rather than three copies of the same faulty expression.
+
+---
+
 ## v1.1.4 — Warrior: Charge no longer lost to Bloodrage, Rend stops on bleed-immune targets
 
 **Two Warrior fixes, both reported from play and both approved before the change.** No

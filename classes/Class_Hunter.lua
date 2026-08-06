@@ -630,18 +630,27 @@ function M:Rotate(cfg)
     end
 
     -- ----------------------------------------------------------------
-    -- 1. Aspect upkeep (one GCD cast when missing or swapping)
-    -- ----------------------------------------------------------------
-    if self:EnsureAspect(cfg, melee) then return end
-
-    -- ----------------------------------------------------------------
-    -- 2. Hunter's Mark ALWAYS leads (strict opener). The rotation does not
-    --    proceed to Sting or shots until Mark is on the target. Universal, since
-    --    the damage-amp debuff helps in melee too.
+    -- 1. Hunter's Mark ALWAYS leads (strict opener) - the first thing a hunter
+    --    does to a target, ahead of aspect upkeep. The rotation does not proceed
+    --    to Sting or shots until Mark is on the target. Universal, since the
+    --    damage-amp debuff helps in melee too.
+    --
+    --    It sits above the aspect on purpose: Mark costs one press ONCE per
+    --    target (MaintainDebuff returns false as soon as the debuff is up, so it
+    --    stops consuming the press), whereas the aspect is upkeep that can wait
+    --    a single press without losing anything - including the mana swap to
+    --    Viper, which is a threshold, not a deadline. The off-GCD layer above
+    --    still runs first because it is fire-and-continue and never eats the
+    --    press.
     -- ----------------------------------------------------------------
     if cfg.useHuntersMark then
         if self:MaintainDebuff("Hunter's Mark", 110) then return end
     end
+
+    -- ----------------------------------------------------------------
+    -- 2. Aspect upkeep (one GCD cast when missing or swapping)
+    -- ----------------------------------------------------------------
+    if self:EnsureAspect(cfg, melee) then return end
 
     -- 3. Aimed Shot opener (optional): the first ranged shot, fired before Auto
     --    Shot starts. Gated on Auto Shot not yet running this fight plus its own
@@ -839,8 +848,14 @@ function M:CmdSpell(alias, onoff)
     if not cfg then msgOut("no profile active.", 1, 0.5, 0.3); return end
     local key = self.spellAlias[string.lower(alias or "")]
     if not key then msgOut("unknown spell alias.", 1, 0.5, 0.3); return end
-    cfg[key] = (string.lower(onoff or "") == "on")
-    msgOut(key .. " = " .. (cfg[key] and "on" or "off") .. " (active profile).")
+    -- `== nil` on purpose: false is a valid result and must not read as an error.
+    local v = Aegis_SBR:ToggleArg(cfg[key], onoff)
+    if v == nil then
+        msgOut("usage: /sbr spell " .. string.lower(alias) .. " [on|off] - no argument toggles.", 1, 0.5, 0.3)
+        return
+    end
+    cfg[key] = v
+    msgOut(Aegis_SBR:SpellLabel(key) .. " " .. (cfg[key] and "on" or "off") .. ".")
 end
 
 function M:HandleCommand(cmd, t)

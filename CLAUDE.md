@@ -203,3 +203,11 @@ calculators block automated access.
   - When scripting bulk renames, run mechanical sweeps BEFORE inserting text that
     intentionally mentions the old name (migration shims, "formerly X" notes, legacy-alias
     comments) — or the sweep eats your own insert.
+  - `verify.py`'s forward-reference check used `\b<name>\s*\(`, and `\b` matches between a
+    dot and a letter — so `string.sub(` read as a call to a local named `sub`. Fixed in
+    v1.1.6 with a `(?<![.:\w])` lookbehind. If a local ever shares a name with a stdlib
+    function and the audit complains, check this before "fixing" the Lua.
+  - An on/off command argument must be parsed with `Aegis_SBR:ToggleArg` (core), NOT
+    `(arg or "") == "on"` — that idiom sends every unrecognised argument, the empty one
+    included, to `false`, so a bare command silently disables what it was meant to toggle
+    (fixed v1.1.5 in three places). Test its result with `== nil`; `false` is a valid return.

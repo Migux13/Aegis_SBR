@@ -589,8 +589,14 @@ function M:CmdSpell(alias, onoff)
     if not cfg then msgOut("no profile active.", 1, 0.5, 0.3); return end
     local key = self.spellAlias[string.lower(alias or "")]
     if not key then msgOut("unknown spell alias.", 1, 0.5, 0.3); return end
-    cfg[key] = (string.lower(onoff or "") == "on")
-    msgOut(key .. " = " .. (cfg[key] and "on" or "off") .. " (active profile).")
+    -- `== nil` on purpose: false is a valid result and must not read as an error.
+    local v = Aegis_SBR:ToggleArg(cfg[key], onoff)
+    if v == nil then
+        msgOut("usage: /sbr spell " .. string.lower(alias) .. " [on|off] - no argument toggles.", 1, 0.5, 0.3)
+        return
+    end
+    cfg[key] = v
+    msgOut(Aegis_SBR:SpellLabel(key) .. " " .. (cfg[key] and "on" or "off") .. ".")
 end
 
 function M:HandleCommand(cmd, t)
