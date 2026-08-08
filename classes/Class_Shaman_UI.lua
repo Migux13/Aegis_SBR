@@ -52,12 +52,20 @@ function M:BuildBody(ui, parent)
 
     -- Weapon imbue upkeep (melee specs). Main-hand only; auto-applies out of
     -- combat, reminds in combat unless "Apply in combat" is on.
-    self.imbueSection = L:Header("Weapon imbue", { enhancement = true, tank = true })
-    self.imbueRow = L:Row{ key = "maintainImbue", label = "Maintain imbue", onToggle = set("maintainImbue") }
+    -- Deliberately NOT spec-gated, unlike "Melee strikes" above. A weapon imbue
+    -- is useful to any shaman who swings at all: an Elemental or Restoration
+    -- shaman between casts, and while levelling, still melees - Rockbiter on a
+    -- healer holding aggro is exactly the case that gets forgotten. Hiding the
+    -- section for those specs also hid the rebuff prompt's switch from them,
+    -- which is how a lapsed imbue went unnoticed in the first place.
+    self.imbueSection = L:Header("Weapon imbue")
+    self.imbueRow = L:Row{ key = "maintainImbue", label = "Maintain imbue (automatic)", onToggle = set("maintainImbue") }
     self.imbueDD = L:Dropdown("imbueMain", "Imbue", 160, set("imbueMain"))
-    self.imbueThreshRow = L:Row{ label = "Warn under",
-        slider = { key = "imbueThresholdMin", min = 0, max = 10, step = 1, suffix = " min", onChange = set("imbueThresholdMin") } }
     self.imbueCombatRow = L:Row{ key = "imbueInCombat", label = "Apply in combat", onToggle = set("imbueInCombat") }
+    -- Lives in Aegis_SBR_BuffUp (global per character, not per profile), like
+    -- the rogue's poison rebuff buttons, so it writes there directly.
+    self.imbueBtnRow = L:Row{ key = "abuWatchImbue", label = "Rebuff button (manual)",
+        onToggle = function(v) if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp:SetWatchImbueMH(v) end end }
 
     self.restoSection = L:Header("Restoration (Heal)", "restoration")
     self.htRow = L:Row{ label = "Heal below",
@@ -102,9 +110,9 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.earthDD, "Earth totem", "Which earth totem to keep down (or none).")
     ui:Tip(self.fireDD, "Fire totem", "Which fire totem to keep down (or none).")
     ui:Tip(self.airDD, "Air totem", "Which air totem to keep down (or none).")
-    ui:Tip(self.imbueRow.cb, "Maintain imbue", "Keep a main-hand weapon imbue up. Auto-applies only when the weapon is bare and you're out of combat (or on approach); in combat it reminds you unless 'Apply in combat' is on.", "Off-hand imbue isn't handled yet.")
+    ui:Tip(self.imbueRow.cb, "Maintain imbue (automatic)", "Let the rotation apply the imbue for you, unasked: only when the weapon is bare and you are out of combat (or on approach). In combat it holds off unless 'Apply in combat' is on.", "This and the manual button below are alternatives, not a pair - use whichever suits you, or both. Off-hand imbue isn't handled yet.")
     ui:Tip(self.imbueDD, "Imbue", "Which main-hand imbue to keep up (Rockbiter / Flametongue / Frostbrand / Windfury).")
-    ui:Tip(self.imbueThreshRow.slider, "Warn under", "Warn when the imbue has fewer than this many minutes left. 0 = only act/warn once it is fully gone.")
+    ui:Tip(self.imbueBtnRow.cb, "Rebuff button (manual)", "Puts a click-to-cast button on screen when your main-hand imbue is gone - the same prompt rogues get for a lapsed poison. You decide when to spend the global cooldown; nothing is cast without your click.", "The manual alternative to 'Maintain imbue' above, and it works with that switched off. It also covers what the automation cannot: that upkeep stands down in combat unless 'Apply in combat' is on. While this is on the chat warning is suppressed - players reported missing that line mid-fight, which is the reason the button exists. Applies to this character across all shaman profiles.")
     ui:Tip(self.imbueCombatRow.cb, "Apply in combat", "Allow re-imbuing during combat (costs a global cooldown). Off by default - imbues are best refreshed between pulls.")
 end
 
@@ -152,6 +160,15 @@ function M:RefreshBody(ui, buf)
     -- follow it (inert while the master is off).
     ui:BindCheck(self.imbueRow, buf.maintainImbue)
     ui:BindCheck(self.imbueCombatRow, buf.imbueInCombat)
+    -- Reads the global BuffUp state, not the profile buffer. Greyed out with no
+    -- imbue selected, since the button would have nothing to cast.
+    if Aegis_SBR_BuffUp then
+        self.imbueBtnRow.cb:SetChecked(Aegis_SBR_BuffUp:WatchImbueMH())
+        if (buf.imbueMain or "none") == "none" then
+            self.imbueBtnRow.cb:Disable()
+            ui:Color(self.imbueBtnRow.label, ui.COL.grey)
+        end
+    end
     local imbueOpts = {
         { label = "Rockbiter Weapon",   value = "rockbiter" },
         { label = "Flametongue Weapon", value = "flametongue" },
@@ -168,14 +185,16 @@ function M:RefreshBody(ui, buf)
         imShown, imCol = imLabel .. " (not learned)", ui.COL.red
     end
     ui:SetDropdown(self.imbueDD, imbueOpts, imcur, imShown, imCol)
-    local imthr = buf.imbueThresholdMin or 0
-    self.imbueThreshRow.slider:SetValue(imthr)
-    if self.imbueThreshRow.slider.valText then self.imbueThreshRow.slider.valText:SetText(imthr .. " min") end
-    -- picker / threshold / in-combat only interactive while imbue upkeep is on
-    local imbueOn = buf.maintainImbue and true or false
-    if imbueOn then self.imbueDD:Enable() else self.imbueDD:Disable() end
-    if imbueOn then self.imbueCombatRow.cb:Enable() else self.imbueCombatRow.cb:Disable() end
-    ui:SliderEnable(self.imbueThreshRow.slider, imbueOn)
+
+    -- The picker feeds BOTH mechanisms, so it stays live while EITHER is on -
+    -- tying it to the automation alone would leave someone who only wants the
+    -- manual button unable to choose which imbue that button casts.
+    -- "Apply in combat" genuinely only qualifies the automation, so that one
+    -- does follow it.
+    local autoOn = buf.maintainImbue and true or false
+    local btnOn = Aegis_SBR_BuffUp and Aegis_SBR_BuffUp:WatchImbueMH() or false
+    if autoOn or btnOn then self.imbueDD:Enable() else self.imbueDD:Disable() end
+    if autoOn then self.imbueCombatRow.cb:Enable() else self.imbueCombatRow.cb:Disable() end
     -- Restoration (Heal) block: toggles mirror the rotation's defaults; sliders and
     -- totem pickers are live only on-spec (and, where it applies, with the spell known).
     local isResto = buf.mode == "restoration"

@@ -169,11 +169,12 @@ function M:NormalizeProfile(c)
     if c.weaveDamage == nil then c.weaveDamage = false end
     if c.weaveManaFloor == nil then c.weaveManaFloor = 40 end
     -- Weapon imbue upkeep (main-hand). Default OFF; out-of-combat only unless
-    -- imbueInCombat is opted in. imbueThresholdMin re-applies when the enchant
+    -- imbueInCombat is opted in. (There is no "warn under X minutes" threshold:
+    -- it could only be edited while the automation was on, which is exactly
+    -- when nobody needs it, and it never did anything but print a chat line.)
     -- has under that many minutes left (0 = only when it is missing entirely).
     if c.maintainImbue == nil then c.maintainImbue = false end
     if c.imbueMain == nil then c.imbueMain = "windfury" end
-    if c.imbueThresholdMin == nil then c.imbueThresholdMin = 0 end
     if c.imbueInCombat == nil then c.imbueInCombat = false end
     return c
 end
@@ -285,7 +286,9 @@ function M:ImbueSpell(cfg)
     return self.IMBUES[cfg.imbueMain or "none"] or ""
 end
 
--- "apply" = main hand bare, safe to cast; "warn" = present but under threshold
+-- "apply" = main hand bare, so there is something to do. A still-present imbue
+-- is never flagged: overwriting one that still works spends a global cooldown
+-- for nothing, and that judgement belongs to the player, not the rotation.
 -- (overwrite needed, warn only); nil = upkeep off / healthy / imbue unknown /
 -- no SuperWoW enchant API.
 function M:ImbueState(cfg)
@@ -295,13 +298,16 @@ function M:ImbueState(cfg)
     local has, ms = Aegis_SBR:WeaponEnchant("main")
     if has == nil then return nil end   -- no enchant API (non-SuperWoW): degrade
     if not has then return "apply" end
-    local thr = (cfg.imbueThresholdMin or 0) * 60000   -- minutes -> ms
-    if thr > 0 and ms and ms < thr then return "warn" end
     return nil
 end
 
 M.imbueWarnT = 0
+-- Chat warning, used only as the FALLBACK when the on-screen rebuff button is
+-- switched off. Several players reported simply not noticing a chat line in a
+-- fight, which is why the button exists; printing both would just be noise, and
+-- the button already says the same thing where it cannot be missed.
 function M:ImbueWarn(text)
+    if Aegis_SBR_BuffUp and Aegis_SBR_BuffUp:WatchImbueMH() then return end
     local now = GetTime()
     if (now - (self.imbueWarnT or 0)) < 8 then return end   -- own throttle
     self.imbueWarnT = now
@@ -313,10 +319,6 @@ function M:MaintainImbue(cfg)
     local state = self:ImbueState(cfg)
     if not state then return false end
     local spell = self:ImbueSpell(cfg)
-    if state == "warn" then
-        self:ImbueWarn(spell .. " is running low - re-imbue between pulls.")
-        return false
-    end
     -- state == "apply": bare main hand. Cast out of combat always; in combat
     -- only with the opt-in (else just a throttled reminder).
     if UnitAffectingCombat("player") and not cfg.imbueInCombat then
@@ -601,6 +603,17 @@ function M:RotateRestoration(cfg)
         if self:MaintainTotem("fire",  self.FIRE_TOTEMS[cfg.totemFire or "none"] or "", OTHER_TOTEM_REDROP) then return end
         if self:MaintainTotem("air",   self.AIR_TOTEMS[cfg.totemAir or "none"] or "", OTHER_TOTEM_REDROP) then return end
     end
+    -- Weapon imbue upkeep: below every heal and totem, above the optional
+    -- damage weave. Restoration reaches this only when nothing needs healing,
+    -- so an imbue can never take the global cooldown away from a heal - but a
+    -- bare weapon is worth fixing before spending that spare cast on a filler
+    -- nuke, since it improves every later swing. Turtle's
+    -- resto shaman does melee (and Rockbiter's threat matters when holding
+    -- aggro), which is why this spec gets it at all; the shared MaintainImbue
+    -- still applies its own rules, so in combat it only warns unless
+    -- imbueInCombat is opted in.
+    if self:MaintainImbue(cfg) then return end
+
     -- Downtime filler: optionally weave damage. Only with an enemy targeted and
     -- mana above the floor, so it never starves heals.
     if cfg.weaveDamage and self:ManaPct() >= (cfg.weaveManaFloor or 40)
@@ -739,7 +752,16 @@ function M:RotateElemental(cfg)
     -- P4 Totem upkeep (all four elements)
     if self:MaintainAllTotems(cfg) then return end
 
-    -- P5 Lightning Bolt filler, the main nuke (builds Electrify). Always the
+    -- P5 weapon imbue: lowest-priority upkeep above the filler, same slot as in
+    -- the melee rotations. Elemental had it only in the targetless pre-pull
+    -- branch, so an imbue lapsing once a fight was under way went unhandled -
+    -- an omission rather than a decision, since every other spec covers both.
+    -- Self-gated in MaintainImbue (in combat it acts only with the
+    -- imbueInCombat opt-in, so by default this warns rather than spending a
+    -- caster's global cooldown).
+    if self:MaintainImbue(cfg) then return end
+
+    -- P6 Lightning Bolt filler, the main nuke (builds Electrify). Always the
     -- level 1 fallback.
     if self:KnowsSpell("Lightning Bolt") then
         self:Queue("Lightning Bolt")
