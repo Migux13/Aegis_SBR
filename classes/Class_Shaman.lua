@@ -63,6 +63,36 @@ local MANATIDE_SPELL     = "Mana Tide Totem"
 -- the earth and air slots. Fire Nova is deliberately absent: it detonates after
 -- ~5s rather than persisting, so it is a cooldown ability, not upkeep (see
 -- MaintainFireTotems).
+-- Where a totem grants the player an aura, that aura - not a clock - is the
+-- truth. It disappears when the totem expires, when it is destroyed, when it is
+-- recalled for mana, AND when the group walks out of its range, which is the
+-- normal case in a moving dungeon and which no timer can see. Spell name ->
+-- aura name; the two differ for most of them.
+--
+-- NOT every totem has one: Searing, Magma and Fire Nova only attack, Grounding
+-- only absorbs. Those are absent here on purpose and fall back to the timer
+-- below, which is also why the per-totem durations still matter - they are
+-- exactly the short-lived ones.
+--
+-- Names are vanilla baselines and want confirming on Turtle with /sbr debug.
+-- A wrong name is self-correcting rather than harmful: see TotemBuffUsable.
+M.TOTEM_BUFF = {
+    ["Strength of Earth Totem"] = "Strength of Earth",
+    ["Stoneskin Totem"]         = "Stoneskin",
+    ["Windfury Totem"]          = "Windfury Totem",
+    ["Grace of Air Totem"]      = "Grace of Air",
+    ["Nature Resistance Totem"] = "Nature Resistance",
+    ["Windwall Totem"]          = "Windwall",
+    ["Flametongue Totem"]       = "Flametongue Totem",
+    ["Mana Spring Totem"]       = "Mana Spring",
+    ["Healing Stream Totem"]    = "Healing Stream",
+}
+
+-- Seconds allowed for a freshly dropped totem's aura to register before its
+-- absence is believed. Without this the rotation would re-drop every press
+-- during the gap between the cast landing and the buff appearing.
+local TOTEM_APPLY_GRACE = 3
+
 local TOTEM_REDROP_DEFAULT = 110
 local TOTEM_REDROP = {
     ["Searing Totem"]           = 55,
@@ -545,14 +575,54 @@ function M:OnCastEvent(caster, target, spellName)
     if slot then self.totemT[slot] = GetTime() end
 end
 
--- The interval now comes from the totem itself rather than from its element
--- slot, because duration varies far more within a slot than between slots -
--- the fire slot alone spans 20s (Magma) to 120s (Flametongue).
+-- Is this totem's aura name trustworthy on this client? A wrong entry in
+-- TOTEM_BUFF would otherwise be the worst possible failure: the aura would read
+-- as permanently missing and the rotation would re-drop the totem every few
+-- seconds forever. So a name is only believed once it has actually been SEEN
+-- after a cast; if a totem is dropped and its aura never shows up within the
+-- grace window, the name is written off for the session and that totem falls
+-- back to the timer - i.e. degrades to the old behaviour instead of spamming.
+function M:TotemBuffUsable(spell)
+    if not self.totemBuffBad then self.totemBuffBad = {} end
+    if not self.totemBuffSeen then self.totemBuffSeen = {} end
+    local buff = self.TOTEM_BUFF[spell]
+    if not buff or self.totemBuffBad[spell] then return nil end
+    return buff
+end
+
+-- Decides whether a totem needs (re)dropping. Two very different questions
+-- depending on the totem, which is why the aura is checked first:
+--   * Aura totems: the buff answers expiry, destruction, Totemic Recall and
+--     walking out of range in one read. A clock answers none of those.
+--   * Damage/utility totems (Searing, Magma, Fire Nova, Grounding) grant no
+--     aura at all, so the per-totem interval is the only signal available -
+--     and it must be per totem, since the fire slot alone spans 20s (Magma)
+--     to 120s (Flametongue).
 function M:MaintainTotem(key, spell, interval)
     if spell == "" or not self:KnowsSpell(spell) then return false end
-    if not interval then interval = TOTEM_REDROP[spell] or TOTEM_REDROP_DEFAULT end
     local now = GetTime()
-    if (now - (self.totemT[key] or 0)) < interval then return false end
+    local cast = self.totemT[key] or 0
+    local buff = self:TotemBuffUsable(spell)
+
+    if buff then
+        if self:HasBuff(buff) then
+            self.totemBuffSeen[spell] = true   -- name proven on this client
+            return false
+        end
+        if cast > 0 and (now - cast) < TOTEM_APPLY_GRACE then
+            return false                        -- just dropped, let it register
+        end
+        if cast > 0 and not self.totemBuffSeen[spell] then
+            -- Dropped it, waited, never saw the aura: the name is wrong here.
+            self.totemBuffBad[spell] = true
+            return false                        -- timer takes over next press
+        end
+        if self:Queue(spell) then self.totemT[key] = now; return true end
+        return false
+    end
+
+    if not interval then interval = TOTEM_REDROP[spell] or TOTEM_REDROP_DEFAULT end
+    if (now - cast) < interval then return false end
     if self:Queue(spell) then self.totemT[key] = now; return true end
     return false
 end

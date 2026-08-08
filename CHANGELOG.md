@@ -64,12 +64,13 @@ while a single filler nuke leaves nothing behind.
 
 Defaults are unchanged, so nobody who does not switch it on notices anything.
 
-### 🐛 Fixed — totem upkeep left short-lived totems on the ground for half a cycle
+### 🐛 Fixed — totem upkeep re-dropped on a clock that could not see reality
 
 Reported from play as totem upkeep simply "not working properly", to the point of using a
-macro instead. It was: the redrop interval came from two blanket constants — 55s for water,
-**110s for everything else** — while the actual durations vary far more *within* an element
-slot than between slots.
+macro instead. Two separate faults, and the second is the interesting one.
+
+**The clock was wrong.** Redrop came from two blanket constants — 55s water, **110s everything
+else** — while durations vary far more *within* an element slot than between slots:
 
 | Totem | Duration | Redropped after | Gap |
 |---|---|---|---|
@@ -78,12 +79,26 @@ slot than between slots.
 | Searing Totem | 60s | 110s | 50s |
 | Windfury / Stoneskin / … | 120s | 110s | fine |
 
-So anyone using Searing or Magma had the totem missing for most of every cycle, while the
-120-second totems that the constant was sized for worked fine — which is why it looked like an
-intermittent, personal problem. The interval is now per totem, resolved from the totem itself,
-a few seconds short of its real duration so it is replaced rather than briefly absent.
+The 120-second totems the constant was sized for worked, which is why this read as an
+intermittent, personal problem.
 
-**Restoration also had its own duplicated copy of the four totem calls** instead of using the
+**But a clock is the wrong instrument regardless.** A totem stays where it was dropped. The
+group moves on, walks out of its radius, and the aura is gone while the timer happily counts
+down — the same for a totem destroyed, or recalled for mana. None of that is visible to a
+timer.
+
+So where a totem grants an aura, **the aura is now what is read**, and it answers expiry,
+destruction, recall and range in a single check. Totems that grant no aura — *Searing*,
+*Magma*, *Fire Nova*, *Grounding* — have nothing to read and keep the timer, which is exactly
+why the per-totem durations above still matter: those are the short-lived ones.
+
+A wrong aura name would otherwise be the worst possible failure, reading as permanently
+missing and re-dropping forever, so a name is only trusted **once it has actually been seen**
+after a cast. If a totem is dropped and its aura never appears, that name is written off for
+the session and the totem falls back to the timer — degrading to the old behaviour instead of
+spamming. The names are vanilla baselines and worth confirming on Turtle with `/sbr debug`.
+
+**Restoration also carried its own duplicated copy of the four totem calls** instead of the
 shared helper, so anything added centrally would have skipped that spec entirely. All four
 specs now go through one path.
 
