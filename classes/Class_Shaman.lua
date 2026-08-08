@@ -52,8 +52,33 @@ local FLAMESHOCK_DUR = 12
 -- totem blind-redrop intervals. Confirm names/durations via /sbr talents and /sbr debug.
 local TALENT_HEALBONUS   = "Purification"
 local MANATIDE_SPELL     = "Mana Tide Totem"
-local WATER_TOTEM_REDROP = 55
-local OTHER_TOTEM_REDROP = 110
+-- Per-totem redrop interval. Two blanket constants (55 water / 110 everything
+-- else) used to cover this, which quietly broke every totem that does not last
+-- ~120s: Searing (60s) stood idle for 50s of each cycle, Magma (20s) for 90s,
+-- Grounding (45s) for 65s. Reported from play as "totem upkeep doesn't work".
+--
+-- Values are the vanilla durations, re-dropped a few seconds early so the totem
+-- is replaced rather than briefly missing. Anything not listed falls back to
+-- TOTEM_REDROP_DEFAULT, which is safe for the 120s totems that make up most of
+-- the earth and air slots. Fire Nova is deliberately absent: it detonates after
+-- ~5s rather than persisting, so it is a cooldown ability, not upkeep (see
+-- MaintainFireTotems).
+local TOTEM_REDROP_DEFAULT = 110
+local TOTEM_REDROP = {
+    ["Searing Totem"]           = 55,
+    ["Magma Totem"]             = 18,
+    ["Flametongue Totem"]       = 110,
+    ["Mana Spring Totem"]       = 55,
+    ["Healing Stream Totem"]    = 55,
+    ["Grounding Totem"]         = 40,
+    ["Windfury Totem"]          = 110,
+    ["Grace of Air Totem"]      = 110,
+    ["Nature Resistance Totem"] = 110,
+    ["Windwall Totem"]          = 110,
+    ["Strength of Earth Totem"] = 110,
+    ["Stoneskin Totem"]         = 110,
+    ["Tremor Totem"]            = 110,
+}
 
 -- Shock debuff texture on the TARGET (fragment match), for Flame Shock upkeep.
 M.dotTex = {
@@ -161,6 +186,9 @@ function M:NormalizeProfile(c)
     if c.useChainHeal == nil then c.useChainHeal = true end
     if c.chainHealCount == nil then c.chainHealCount = 3 end
     if c.useTotems == nil then c.useTotems = true end
+    -- AoE fire pair (Fire Nova on cooldown + Magma between). Off by default:
+    -- it takes over the fire slot from the single-totem picker.
+    if c.aoeFireTotems == nil then c.aoeFireTotems = false end
     if c.totemWater == nil then c.totemWater = "manaspring" end
     if c.totemEarth == nil then c.totemEarth = "none" end
     if c.totemFire == nil then c.totemFire = "none" end
@@ -517,8 +545,12 @@ function M:OnCastEvent(caster, target, spellName)
     if slot then self.totemT[slot] = GetTime() end
 end
 
+-- The interval now comes from the totem itself rather than from its element
+-- slot, because duration varies far more within a slot than between slots -
+-- the fire slot alone spans 20s (Magma) to 120s (Flametongue).
 function M:MaintainTotem(key, spell, interval)
     if spell == "" or not self:KnowsSpell(spell) then return false end
+    if not interval then interval = TOTEM_REDROP[spell] or TOTEM_REDROP_DEFAULT end
     local now = GetTime()
     if (now - (self.totemT[key] or 0)) < interval then return false end
     if self:Queue(spell) then self.totemT[key] = now; return true end
@@ -529,12 +561,53 @@ end
 -- the four element slots during a lull, one per press. Damage specs default
 -- their fire slot to Searing (see templates), so this fully replaces the old
 -- standalone Searing upkeep with no loss - and adds water/earth/air on top.
+-- AoE fire slot: Fire Nova on cooldown, Magma to cover the gaps.
+--
+-- These two cannot both live in the fire dropdown, because the point is to
+-- ALTERNATE them, not to choose one. Fire Nova is not upkeep at all - it
+-- detonates after ~5s and then sits on a cooldown - so it behaves like a
+-- cooldown ability, while Magma is the sustained tick that fills the wait.
+-- They share the one fire totem slot in game, so dropping either replaces the
+-- other; that is exactly why Magma must not be re-dropped while Fire Nova is
+-- still standing, and why the Magma timer is reset when Fire Nova goes down.
+--
+-- Requested for lasher farming, where the pull is a cluster of low-health mobs
+-- and the fire slot is the whole damage plan.
+function M:MaintainFireTotems(cfg)
+    if not cfg.aoeFireTotems then return false end
+    local nova, magma = "Fire Nova Totem", "Magma Totem"
+    local haveNova, haveMagma = self:KnowsSpell(nova), self:KnowsSpell(magma)
+    if not haveNova and not haveMagma then return false end
+
+    if haveNova and self:OwnCDReady(nova) then
+        if self:Queue(nova) then
+            self.totemT["fire"] = GetTime()
+            -- Nova occupies the slot only briefly; letting Magma follow as soon
+            -- as it has detonated is the point of the pairing.
+            self.novaUntil = GetTime() + 5
+            return true
+        end
+    end
+    -- Hold Magma back while a Nova is still standing - re-dropping would
+    -- replace it and waste the detonation it was cast for.
+    if haveMagma and GetTime() >= (self.novaUntil or 0) then
+        if self:MaintainTotem("fire", magma) then return true end
+    end
+    return false
+end
+
 function M:MaintainAllTotems(cfg)
     if cfg.useTotems == false then return false end
-    if self:MaintainTotem("water", self.WATER_TOTEMS[cfg.totemWater or "none"] or "", WATER_TOTEM_REDROP) then return true end
-    if self:MaintainTotem("earth", self.EARTH_TOTEMS[cfg.totemEarth or "none"] or "", OTHER_TOTEM_REDROP) then return true end
-    if self:MaintainTotem("fire",  self.FIRE_TOTEMS[cfg.totemFire or "none"] or "", OTHER_TOTEM_REDROP) then return true end
-    if self:MaintainTotem("air",   self.AIR_TOTEMS[cfg.totemAir or "none"] or "", OTHER_TOTEM_REDROP) then return true end
+    if self:MaintainTotem("water", self.WATER_TOTEMS[cfg.totemWater or "none"] or "") then return true end
+    if self:MaintainTotem("earth", self.EARTH_TOTEMS[cfg.totemEarth or "none"] or "") then return true end
+    -- The AoE pair owns the fire slot when enabled, so the single-totem picker
+    -- is skipped rather than fighting it for the same slot.
+    if cfg.aoeFireTotems then
+        if self:MaintainFireTotems(cfg) then return true end
+    elseif self:MaintainTotem("fire", self.FIRE_TOTEMS[cfg.totemFire or "none"] or "") then
+        return true
+    end
+    if self:MaintainTotem("air",   self.AIR_TOTEMS[cfg.totemAir or "none"] or "") then return true end
     return false
 end
 
@@ -598,10 +671,10 @@ function M:RotateRestoration(cfg)
     -- Nothing urgent: keep the shield and totems up during the lull.
     if self:MaintainShield(cfg) then return end
     if cfg.useTotems ~= false then
-        if self:MaintainTotem("water", self.WATER_TOTEMS[cfg.totemWater or "manaspring"] or "", WATER_TOTEM_REDROP) then return end
-        if self:MaintainTotem("earth", self.EARTH_TOTEMS[cfg.totemEarth or "none"] or "", OTHER_TOTEM_REDROP) then return end
-        if self:MaintainTotem("fire",  self.FIRE_TOTEMS[cfg.totemFire or "none"] or "", OTHER_TOTEM_REDROP) then return end
-        if self:MaintainTotem("air",   self.AIR_TOTEMS[cfg.totemAir or "none"] or "", OTHER_TOTEM_REDROP) then return end
+        -- Shared helper rather than four copies of the same calls: Restoration
+        -- had its own duplicate set, so anything added centrally (the AoE fire
+        -- pair, the per-totem intervals) silently skipped this spec.
+        if self:MaintainAllTotems(cfg) then return end
     end
     -- Weapon imbue upkeep: below every heal and totem, above the optional
     -- damage weave. Restoration reaches this only when nothing needs healing,

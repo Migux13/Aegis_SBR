@@ -43,6 +43,7 @@ function M:BuildBody(ui, parent)
     self.waterDD = L:Dropdown("totemWater", "Water totem", 160, set("totemWater"))
     self.earthDD = L:Dropdown("totemEarth", "Earth totem", 160, set("totemEarth"))
     self.fireDD  = L:Dropdown("totemFire", "Fire totem", 160, set("totemFire"))
+    self.aoeFireRow = L:Row{ key = "aoeFireTotems", label = "AoE fire pair (Nova + Magma)", onToggle = set("aoeFireTotems") }
     self.airDD   = L:Dropdown("totemAir", "Air totem", 160, set("totemAir"))
 
     L:Header("Cooldowns & utility")
@@ -104,6 +105,7 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.lhwRow.slider, "Lesser HW HP", "Use Lesser Healing Wave when a target drops under this health.")
     ui:Tip(self.chainRow.slider, "Chain Heal count", "How many hurt allies are needed before Chain Heal fires.")
     ui:Tip(self.totemsRow.cb, "Maintain totems", "Keeps the totems below dropped in every spec, re-cast during a lull. Cast timing is tracked from your actual casts (SuperWoW), not a blind clock.")
+    ui:Tip(self.aoeFireRow.cb, "AoE fire pair (Nova + Magma)", "Takes over the fire slot: Fire Nova Totem every time its cooldown is up, Magma Totem in between to keep the ground ticking.", "The two cannot both sit in the picker above, because the point is to alternate them - Fire Nova detonates after a few seconds and then waits on a cooldown, so it behaves like a cooldown ability while Magma is the sustained damage. They share one totem slot in game, so Magma is held back while a Nova is still standing rather than replacing the detonation you just paid for. While this is on, the fire picker above is ignored.")
     ui:Tip(self.weaveRow.cb, "Weave damage", "When nobody needs healing and you have an enemy targeted, cast Lightning Bolt in the downtime.", "Mana-gated so it never starves heals. Off by default - same as /sbr weave on|off.")
     ui:Tip(self.weaveRow.slider, "Weave mana floor", "Only weave damage while your mana is above this percent.")
     ui:Tip(self.waterDD, "Water totem", "Which water totem to keep down. Mana Spring restores party mana.")
@@ -203,6 +205,12 @@ function M:RefreshBody(ui, buf)
     ui:BindCheck(self.lhwRow, buf.useLesserHW ~= false, "Lesser Healing Wave")
     ui:BindCheck(self.chainRow, buf.useChainHeal ~= false, "Chain Heal")
     ui:BindCheck(self.totemsRow, buf.useTotems ~= false)
+    ui:BindCheck(self.aoeFireRow, buf.aoeFireTotems)
+    -- The picker and the pair own the same slot, so whichever is inactive is
+    -- greyed rather than left looking as if both apply.
+    if buf.aoeFireTotems then
+        self.fireDD:Disable()
+    end
     ui:BindCheck(self.weaveRow, buf.weaveDamage)
     -- NS is dual-named (Nature's / Ancestral Swiftness); grey the label if neither is known.
     if not self:NSSpell() then

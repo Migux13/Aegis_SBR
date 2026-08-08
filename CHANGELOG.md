@@ -4,11 +4,12 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v1.1.7 — Shaman imbues for every spec, per-context buff lists, Paladin melee heal margin
+## v1.1.7 — Shaman totem + imbue overhaul, per-context buff lists, Paladin melee heal margin
 
-**Community report + two follow-ups.** A shaman reported that a lapsed **Rockbiter** gave no
-warning, unlike a rogue's poison. It turned out to be a hole from the BuffUp integration, and
-closing it exposed two more.
+**Two player reports, and what they uncovered.** A shaman reported that a lapsed **Rockbiter**
+gave no warning, unlike a rogue's poison; another that **totem upkeep did not work properly**,
+to the point of using a macro instead. Both were real, both had a single concrete cause, and
+chasing them turned up three further gaps in the same area.
 
 ### 🐛 Fixed — a lapsed weapon imbue was invisible
 
@@ -62,6 +63,43 @@ heal, but above the optional damage weave, since a bare weapon degrades every la
 while a single filler nuke leaves nothing behind.
 
 Defaults are unchanged, so nobody who does not switch it on notices anything.
+
+### 🐛 Fixed — totem upkeep left short-lived totems on the ground for half a cycle
+
+Reported from play as totem upkeep simply "not working properly", to the point of using a
+macro instead. It was: the redrop interval came from two blanket constants — 55s for water,
+**110s for everything else** — while the actual durations vary far more *within* an element
+slot than between slots.
+
+| Totem | Duration | Redropped after | Gap |
+|---|---|---|---|
+| Magma Totem | 20s | 110s | **90s with no totem** |
+| Grounding Totem | 45s | 110s | 65s |
+| Searing Totem | 60s | 110s | 50s |
+| Windfury / Stoneskin / … | 120s | 110s | fine |
+
+So anyone using Searing or Magma had the totem missing for most of every cycle, while the
+120-second totems that the constant was sized for worked fine — which is why it looked like an
+intermittent, personal problem. The interval is now per totem, resolved from the totem itself,
+a few seconds short of its real duration so it is replaced rather than briefly absent.
+
+**Restoration also had its own duplicated copy of the four totem calls** instead of using the
+shared helper, so anything added centrally would have skipped that spec entirely. All four
+specs now go through one path.
+
+### ✨ AoE fire pair: Fire Nova on cooldown, Magma between
+
+Requested for lasher farming, where the pull is a cluster of low-health mobs and the fire slot
+*is* the damage plan. New **"AoE fire pair (Nova + Magma)"** toggle, which takes over the fire
+slot and greys out the single-totem picker.
+
+Deliberately not another entry in that picker: the point is to **alternate** the two, not
+choose one. Fire Nova is not upkeep at all — it detonates after a few seconds and then waits on
+a cooldown, behaving like a cooldown ability, while Magma is the sustained tick that fills the
+gap. Since both occupy the one fire totem slot in game, Magma is held back while a Nova is
+still standing, rather than replacing the detonation it was just cast for.
+
+Off by default.
 
 ### ✨ Buff watch lists are now per context (Solo / Party / Raid)
 
