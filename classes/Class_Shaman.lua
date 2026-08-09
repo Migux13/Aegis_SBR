@@ -286,6 +286,25 @@ end
 function M:ShieldSpell(cfg) return self.SHIELDS[cfg.shield or "lightning"] or "" end
 function M:ShockSpell(cfg)  return self.SHOCKS[cfg.shock or "earth"] or "" end
 
+-- Shocks reach 20yd, Lightning Bolt 30. Without this check the rotation picks
+-- the shock first (correctly, it is the stronger use of the cooldown), the cast
+-- silently fails out of range, and the press is spent doing nothing at all -
+-- even though Lightning Bolt below it would have reached. Reported from play at
+-- level 4, where Earth Shock plus Lightning Bolt IS the whole rotation.
+--
+-- IsSpellInRange is the same API the default action bars use to red-tint an
+-- out-of-range icon. It returns nil when it cannot judge (no target, unknown
+-- spell); nil is treated as "in range" so an unanswerable check can never
+-- silence an ability that would otherwise have fired.
+function M:InSpellRange(spell)
+    if not spell or spell == "" then return false end
+    if not UnitExists("target") then return false end
+    if not IsSpellInRange then return true end
+    local r = IsSpellInRange(spell, "target")
+    if r == nil then return true end
+    return r == 1
+end
+
 -- Queue a known spell through SuperWoW's cast queue so a cast in progress is
 -- not clipped. Returns true if the spell is known and was issued.
 function M:Queue(name)
@@ -837,7 +856,8 @@ function M:RotateEnhancement(cfg)
     end
 
     -- P5 shock on its (shared) cooldown, consuming the Stormstrike buff
-    if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock) then
+    if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock)
+        and self:InSpellRange(shock) then
         if shock == "Flame Shock" then
             if self:MaintainFlameShock() then return end
         else
@@ -887,7 +907,7 @@ function M:RotateElemental(cfg)
     elseif self:ShockSpell(cfg) ~= "" then
         -- a non-Flame shock chosen: cast it on its cooldown as a nuke
         local shock = self:ShockSpell(cfg)
-        if self:KnowsSpell(shock) and self:IsReady(shock) then
+        if self:KnowsSpell(shock) and self:IsReady(shock) and self:InSpellRange(shock) then
             if self:Queue(shock) then return end
         end
     end
@@ -943,7 +963,8 @@ function M:RotateTank(cfg)
     end
 
     -- P4 Earth Shock (or chosen shock) on cooldown, the primary threat tool
-    if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock) then
+    if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock)
+        and self:InSpellRange(shock) then
         if shock == "Flame Shock" then
             if self:MaintainFlameShock() then return end
         else
