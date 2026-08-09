@@ -22,7 +22,7 @@
 
 local M = Aegis_SBR:NewClassModule("ROGUE")
 M.uiTitle = "Rogue"
-M.uiHeight = 430
+M.uiHeight = 574
 
 -- Chat output is shared in the core; this shim keeps call sites unchanged.
 local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
@@ -73,7 +73,7 @@ M.templates = {
     starter = {  -- valid for any rogue, only Slice and Dice upkeep
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = false,
-        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
+        useExecute = false, executeHpPct = 10, executeTTK = 4, executeMinCP = 1, refreshMaxCP = 5, evisExecuteOnly = false, ruptureCP = 3,
         cpFinish = 4, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = false,
     },
     assassination = {
@@ -83,13 +83,13 @@ M.templates = {
         -- points Rupture was cast with (2% per point) and a recast overwrites it outright, no
         -- keep-the-stronger-one logic - so anything below 5 risks replacing an existing 10%
         -- buff with a weaker one the moment Rupture comes due (Discord-reported, confirmed).
-        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 5,
+        useExecute = false, executeHpPct = 10, executeTTK = 4, executeMinCP = 1, refreshMaxCP = 5, evisExecuteOnly = false, ruptureCP = 5,
         cpFinish = 4, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = false,
     },
     combat = {
         builder = "", useSnd = true, useEnvenom = false, useRupture = false, useRiposte = false,
         useSurpriseAttack = true,
-        useExecute = false, executeHpPct = 10, evisExecuteOnly = false, ruptureCP = 3,
+        useExecute = false, executeHpPct = 10, executeTTK = 4, executeMinCP = 1, refreshMaxCP = 5, evisExecuteOnly = false, ruptureCP = 3,
         cpFinish = 5, buffRenew = 1, useColdBlood = false, popCDs = false, autoCDElite = true,
     },
 }
@@ -117,6 +117,26 @@ function M:NormalizeProfile(c)
     -- combo point after any finisher, so there is always something to spend.
     if c.useExecute == nil then c.useExecute = false end
     if c.executeHpPct == nil then c.executeHpPct = 10 end
+    -- Both combo-point floors default to 1, which is the behaviour that existed
+    -- before them: no floor at all. They are opt-in tuning, not a new model.
+    if c.executeMinCP == nil then c.executeMinCP = 1 end
+    -- Highest combo point count a buff refresh is allowed to spend. Above it the
+    -- surplus goes into Eviscerate first and the buff is refreshed on the next
+    -- press with the point Ruthlessness hands back. 5 = no ceiling, which is
+    -- what the rotation always did.
+    if c.refreshMaxCP == nil then c.refreshMaxCP = 5 end
+    -- Retired: a combo point FLOOR for refreshes. Measured over 1355 presses it
+    -- pushed Envenom uptime from 84% down to 61% and pinned the rotation at
+    -- 2 combo points, because reaching the floor costs a builder GCD during
+    -- which the buff is simply not up. The ceiling above is the same knob
+    -- turned the right way round. Do not reintroduce it without new evidence.
+    c.refreshMinCP = nil
+    -- Seconds-to-live that count as "about to die". When the core can measure
+    -- how fast the target is losing health it is a far better trigger than a
+    -- health percentage: 10% of a boss is a minute of fighting, 10% of a boar
+    -- is already over. 0 turns the measurement off and leaves the health
+    -- percentage in sole charge, exactly as before this setting existed.
+    if c.executeTTK == nil then c.executeTTK = 4 end
     -- Rupture carries its OWN combo-point threshold, deliberately separate from
     -- Eviscerate's: only Rupture's payoff (the Taste for Blood damage buff)
     -- scales with the points spent, and sharing Eviscerate's higher threshold
@@ -229,7 +249,61 @@ function M:ColdBloodBefore(cfg, cp)
     if cp < (cfg.cpFinish or 4) then return end
     if not self:KnowsSpell("Cold Blood") then return end
     if not self:OwnCDReady("Cold Blood") then return end
+    -- The energy check is not a nicety here, it protects a three minute
+    -- cooldown. Cold Blood is free and off the GCD, so it always "succeeds";
+    -- the Eviscerate behind it does not, and an Eviscerate that fails for
+    -- want of energy leaves the buff sitting there to be eaten by the next
+    -- Sinister Strike for a fraction of the payoff. Only arm it when the
+    -- finisher it belongs to can actually be paid for.
+    if not Aegis_SBR:CanAfford("Eviscerate") then return end
     CastSpellByName("Cold Blood")
+end
+
+-- Spend the surplus before refreshing a buff.
+--
+-- Slice and Dice and Envenom have fixed potency; only their DURATION scales
+-- with the points spent. Duration is worth paying for exactly as long as the
+-- fight lasts long enough to use it - and measured over 28 fights, a dungeon
+-- pull runs 19s with 20s of downtime after it, during which the buff decays
+-- to nothing. It carries into the next pull a median of 0.0 seconds. A 5-point
+-- Slice and Dice buys 30s for the same 20 energy a 1-point one spends on 13s,
+-- and on a 19 second fight the extra 17s is simply thrown away.
+--
+-- So above the ceiling the points go into Eviscerate instead, and the buff is
+-- refreshed on the very next press with the point Ruthlessness returns. This
+-- is the model experienced players describe, and it only holds while fights
+-- are short - in a raid, where the buff runs its full length, the ceiling
+-- belongs back at 5.
+--
+-- Never dumps when that would leave the buff down for nothing: an unaffordable
+-- or unlearned Eviscerate, or evisExecuteOnly reserving it for the execute
+-- phase, all fall through to the plain refresh.
+-- Returns true when the press has been used up (Eviscerate cast, or
+-- deliberately held), false when the caller should refresh the buff normally.
+function M:DumpBeforeRefresh(cfg, cp, buffLeft)
+    if cp <= (cfg.refreshMaxCP or 5) then return false end
+    -- Structural reasons why the surplus could never reach Eviscerate. Refusing
+    -- to refresh here would deadlock: the points have nowhere else to go and the
+    -- buff would stay down forever. These fall through on purpose.
+    if cfg.evisExecuteOnly then return false end
+    if not self:KnowsSpell("Eviscerate") then return false end
+    -- Being short of energy is NOT such a reason - it passes on its own. This
+    -- used to fall through too, and that produced exactly the 5-point buff
+    -- refresh the ceiling exists to prevent: measured at 21 energy against a
+    -- cost of 30, which is nine energy, under a second of regeneration. So we
+    -- hold the press instead and let the energy arrive.
+    --
+    -- The valve is the buff itself: once it has actually DROPPED there is
+    -- nothing left to protect, and a buff that is down costs more than one
+    -- refreshed above the ceiling. Until then, waiting is cheaper than paying
+    -- five combo points for a duration this fight will not use.
+    if not Aegis_SBR:CanAfford("Eviscerate") then
+        if (buffLeft or 0) > 0 then return true end
+        return false
+    end
+    self:ColdBloodBefore(cfg, cp)
+    self:Cast("Eviscerate")
+    return true
 end
 
 -- ============================================================
@@ -258,12 +332,40 @@ function M:Rotate(cfg)
     local cp = GetComboPoints("player", "target")
     local now = GetTime()
 
-    -- Execute: below a low HP threshold, finish with whatever combo points
-    -- are on hand rather than risk them going to waste if the target dies
-    -- before reaching the normal cpFinish. Requires at least 1 combo point
-    -- (Ruthlessness, 100% at 3/3, guarantees one is on hand after any
-    -- finisher, so this is rarely blocked once a fight is underway).
-    local execute = cfg.useExecute and cp >= 1 and self:TargetHPPct() <= (cfg.executeHpPct or 10)
+    -- Execute: once the target is nearly dead, finish with whatever combo
+    -- points are on hand rather than risk them going to waste on the kill.
+    -- Requires at least 1 combo point (Ruthlessness, 100% at 3/3, guarantees
+    -- one is on hand after any finisher, so this is rarely blocked once a
+    -- fight is underway).
+    --
+    -- The health percentage is the ONLY thing that starts the execute phase.
+    -- Time to kill was briefly allowed to start it too and that was wrong: a
+    -- normal mob's whole life is shorter than any sensible window, so "dies
+    -- within 4 seconds" is true from the first measurement onward and the
+    -- rotation dumped 1-point Eviscerates from full health. Time can only ever
+    -- take the execute phase AWAY, never grant it.
+    -- executeMinCP is the floor for the dump. At 1 (the default, and what the
+    -- rotation always did) a single point is enough. Measured from a real log:
+    -- 69 of 108 execute presses went out at 1 combo point, which costs a full
+    -- Eviscerate's energy for a fraction of a builder's damage - so the floor
+    -- exists to be raised, but raising it is the player's call.
+    local execute = cfg.useExecute and cp >= (cfg.executeMinCP or 1)
+        and self:TargetHPPct() <= (cfg.executeHpPct or 10)
+
+    -- ...and it only takes away the CHEAP dump. Below cpFinish, execute is
+    -- spending points early on the argument that the target is about to die -
+    -- an argument a measured fifteen seconds of remaining life refutes, which
+    -- is the "finishes too early" report: an elite parked at 8% collecting
+    -- 1-point Eviscerates. At or above cpFinish the finisher is worth its
+    -- points regardless of how long the target lives, so it is never held
+    -- back - and that keeps "Eviscerate only in execute" working on a boss,
+    -- which a blanket suppression would have switched off completely.
+    -- Unknown TTK never suppresses.
+    local ttk = Aegis_SBR:TargetTTK()
+    local ttkWin = cfg.executeTTK or 0
+    if execute and cp < cpEvis and ttkWin > 0 and ttk and ttk > ttkWin then
+        execute = false
+    end
 
     if self:Tracing() then
         self:Trace("cp=" .. cp
@@ -275,7 +377,12 @@ function M:Rotate(cfg)
                 or (self:TargetDebuffUp("Rupture", "Ability_Rogue_Rupture") and "dot" or "no-dot")) or "-")
             .. " rip=" .. ((cfg.useRiposte and now < (self.riposteExpiry or 0)) and "Y" or "N")
             .. " sa=" .. ((cfg.useSurpriseAttack and now < (self.surpriseExpiry or 0)) and "Y" or "N")
+            .. " en=" .. (UnitMana("player") or 0)
+            .. "/" .. (Aegis_SBR:SpellCost("Eviscerate") or "?")
+            .. " hp=" .. string.format("%.0f%%", self:TargetHPPct())
+            .. " ttk=" .. (ttk and string.format("%.1fs", ttk) or "?")
             .. " exec=" .. (cfg.useExecute and (execute and "Y" or "N") or "-")
+            .. " cap=" .. (cfg.refreshMaxCP or 5) .. "/" .. (cfg.executeMinCP or 1)
             .. " cb=" .. (cfg.useColdBlood and (self:KnowsSpell("Cold Blood")
                 and (self:OwnCDReady("Cold Blood") and "rdy" or "cd") or "?") or "-")
             .. " elite=" .. (isElite and "Y" or "N"),
@@ -359,10 +466,12 @@ function M:Rotate(cfg)
     -- global cooldown for nothing.
     -- ------------------------------------------------------------
     if sndDue then
+        if self:DumpBeforeRefresh(cfg, cp, sndLeft) then return end
         self:Cast("Slice and Dice")   -- uptime is read back off the buff itself, nothing to stamp
         return
     end
     if envDue then
+        if self:DumpBeforeRefresh(cfg, cp, envLeft) then return end
         self:Cast("Envenom")   -- uptime is read back off the buff itself, nothing to stamp
         return
     end
