@@ -68,6 +68,7 @@ end
 function Aegis_SBR:InvalidateSpellIndex()
     Aegis_SBR.spellIndex = nil
     Aegis_SBR.spellRanks = nil
+    Aegis_SBR.costCache  = nil   -- slots moved, and a talent may have changed a cost
 end
 
 function Aegis_SBR:FindSpellSlot(name)
@@ -83,6 +84,74 @@ end
 
 function Aegis_SBR:KnowsSpell(name)
     return self:FindSpellSlot(name) ~= nil
+end
+
+-- ============================================================
+-- Spell cost. Read from the spellbook tooltip rather than kept in a table:
+-- talents change costs (Improved Sinister Strike, Improved Shred, ...), Turtle
+-- rebalances them, and a hardcoded number that is wrong by 5 energy is worse
+-- than no check at all - it would silently hold back an ability the character
+-- can actually afford. The tooltip is what the client itself believes, so it is
+-- right by construction on any server and at any talent build.
+--
+-- Cached per spell name and dropped with the spellbook index, which
+-- SPELLS_CHANGED invalidates - and learning a rank or spending a talent point
+-- fires exactly that.
+--
+-- Returns nil when the cost cannot be read (no tooltip line, unknown spell).
+-- Callers must treat nil as "affordable": an unreadable cost may never be the
+-- reason an ability does not fire.
+-- ============================================================
+local SCAN_TIP = "Aegis_SBR_ScanTip"
+local scanTip
+
+function Aegis_SBR:SpellCost(name)
+    if not self.costCache then self.costCache = {} end
+    local hit = self.costCache[name]
+    if hit then return hit end
+    local slot = self:FindSpellSlot(name)
+    if not slot then return nil end          -- not cached: it may be learned later
+    if not scanTip then
+        scanTip = CreateFrame("GameTooltip", SCAN_TIP, nil, "GameTooltipTemplate")
+    end
+    -- SetOwner is repeated before every read, not done once at creation: a
+    -- tooltip that has been cleared or hidden in between can refuse to
+    -- populate its lines without a live owner, and that failure is silent -
+    -- it just reads back as "no cost".
+    scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+    scanTip:ClearLines()
+    scanTip:SetSpell(slot, BOOKTYPE_SPELL)
+    -- The cost sits on the left of the second line ("45 Energy"), but a spell
+    -- without one puts something else there, so a few lines are checked. The
+    -- pattern needs the WHOLE line to be a number and a single word, which is
+    -- what keeps "30 yd range" and "6 sec cooldown" from being read as costs.
+    local cost
+    for i = 2, 4 do
+        local fs = getglobal(SCAN_TIP .. "TextLeft" .. i)
+        local txt = fs and fs:GetText()
+        if txt then
+            -- Four digit mana costs are printed with a thousands separator.
+            txt = string.gsub(txt, ",", "")
+            local _, _, num = string.find(txt, "^(%d+) %a+$")
+            if num then cost = tonumber(num); break end
+        end
+    end
+    -- Only SUCCESS is cached. A failed read is not necessarily a spell without
+    -- a cost - it can equally be a tooltip that did not populate this once -
+    -- and caching that would freeze the wrong answer in place until the next
+    -- SPELLS_CHANGED, which is exactly the kind of intermittent, unreproducible
+    -- behaviour that is worst to debug. Re-scanning costs one hidden tooltip.
+    if cost then self.costCache[name] = cost end
+    return cost
+end
+
+-- Can the player pay for this spell right now? UnitMana returns whichever
+-- resource the class uses, so this is energy on a rogue, rage on a warrior and
+-- mana everywhere else, with no per-class branch needed.
+function Aegis_SBR:CanAfford(name)
+    local cost = self:SpellCost(name)
+    if not cost then return true end
+    return (UnitMana("player") or 0) >= cost
 end
 
 function Aegis_SBR:Cast(name)
@@ -434,6 +503,107 @@ function Aegis_SBR:TargetId()
     return UnitName("target") or ""
 end
 
+-- ============================================================
+-- Time to kill (TTK)
+-- How long the current target has left, in seconds, from how fast its health
+-- is actually falling. Two rotation problems need it and neither can be solved
+-- with a health PERCENTAGE alone: spending combo points before the mob dies
+-- (5 CP at 20% is worth dumping on a dying trash mob and worth holding on a
+-- boss), and not re-applying a DoT or a buff that will outlive the fight.
+--
+-- Percent per second, not damage per second: TargetHPPct is a ratio, so no
+-- absolute health value is needed and the estimate works on mobs whose max
+-- health we cannot read. It also means the number is directly comparable
+-- across a level 4 boar and a raid boss.
+--
+-- Deliberately a plain rolling window rather than the recursive least squares
+-- the TimeToKill addon uses. RLS earns its keep over a multi-minute boss with
+-- phase changes; here the consumer only ever asks "less than a few seconds?",
+-- a question a short window answers just as well and with no tuning constants
+-- to get wrong.
+--
+-- TargetTTK returns nil, never a guess, until it has enough history. Every
+-- consumer must treat nil as "not dying soon" - the same rule DotRemaining
+-- follows, so an unknown can never suppress an ability.
+-- ============================================================
+local TTK_WINDOW   = 8      -- seconds of history kept
+local TTK_MIN_SPAN = 3      -- seconds of history needed before answering
+local TTK_MIN_STEP = 0.3    -- shortest gap between two samples
+local TTK_MIN_N    = 4      -- samples needed before answering
+
+function Aegis_SBR:ResetTTK()
+    self.ttkId = nil
+    self.ttkN  = 0
+    self.ttkT  = {}
+    self.ttkH  = {}
+end
+
+-- Called once per press from RunRotation, which is the only place that reliably
+-- fires while a fight is happening (there is no combat tick to hang this on).
+-- Presses arrive at roughly the GCD, so the window holds about eight samples.
+function Aegis_SBR:SampleTTK()
+    local id  = self:TargetId()
+    local now = GetTime()
+    local hp  = self:TargetHPPct()
+    if id ~= self.ttkId then self:ResetTTK(); self.ttkId = id end
+    local n = self.ttkN or 0
+    if n > 0 and (now - self.ttkT[n]) < TTK_MIN_STEP then return end
+    -- Health going UP is never part of a kill curve: the mob was healed, or a
+    -- different mob is reusing the id (the name fallback, when SuperWoW GUIDs
+    -- are unavailable). Either way the stored samples describe a fight that is
+    -- no longer happening, so start over rather than average across the jump.
+    -- One percent of slack absorbs a mob's own health regeneration.
+    if n > 0 and hp > self.ttkH[n] + 1 then
+        n = 0
+        self.ttkT = {}
+        self.ttkH = {}
+    end
+    n = n + 1
+    self.ttkT[n] = now
+    self.ttkH[n] = hp
+    -- Drop samples older than the window by shifting the rest down. n is single
+    -- digits, so the copy costs nothing and avoids a wrapping ring index.
+    local cut, first = now - TTK_WINDOW, 1
+    while first < n and self.ttkT[first] < cut do first = first + 1 end
+    if first > 1 then
+        local k = 0
+        for i = first, n do
+            k = k + 1
+            self.ttkT[k] = self.ttkT[i]
+            self.ttkH[k] = self.ttkH[i]
+        end
+        for i = k + 1, n do self.ttkT[i] = nil; self.ttkH[i] = nil end
+        n = k
+    end
+    self.ttkN = n
+end
+
+-- Seconds until the current target dies, or nil when it cannot be estimated
+-- (too little history, or the target is not losing health).
+function Aegis_SBR:TargetTTK()
+    if not UnitExists("target") then return nil end
+    if self:TargetId() ~= self.ttkId then return nil end
+    local n = self.ttkN or 0
+    if n < TTK_MIN_N then return nil end
+    local span = self.ttkT[n] - self.ttkT[1]
+    if span < TTK_MIN_SPAN then return nil end
+    local drop = self.ttkH[1] - self.ttkH[n]
+    if drop <= 0 then return nil end
+    local hp = self:TargetHPPct()
+    if hp <= 0 then return 0 end
+    return hp / (drop / span)
+end
+
+-- "Will the target be dead within sec seconds?" The one form call sites should
+-- use, because it answers false for an unknown TTK rather than making every
+-- caller remember to nil-check.
+function Aegis_SBR:TTKBelow(sec)
+    if not sec or sec <= 0 then return false end
+    local ttk = self:TargetTTK()
+    if not ttk then return false end
+    return ttk < sec
+end
+
 -- Best effort melee proximity. CheckInteractDistance index 3 is about 9.9
 -- yards, a practical proxy for "close enough to fight". Used only to decide
 -- whether we are still running in, so we can pre-cast the seal on the way.
@@ -501,6 +671,12 @@ function Aegis_SBR:Debug()
             DEFAULT_CHAT_FRAME:AddMessage("  [" .. i .. "] " .. nm .. " / " .. (stacks or 0) .. " / " .. t)
         end
         if not any then DEFAULT_CHAT_FRAME:AddMessage("  (none)") end
+        -- TTK only fills while the rotation button is being pressed, so a debug
+        -- run on a fresh target legitimately reports "unknown".
+        local ttk = self:TargetTTK()
+        DEFAULT_CHAT_FRAME:AddMessage("Time to kill: "
+            .. (ttk and (string.format("%.1f", ttk) .. "s") or "unknown")
+            .. " (" .. (self.ttkN or 0) .. " samples)", 1, 0.8, 0.0)
     else
         DEFAULT_CHAT_FRAME:AddMessage("No target.", 1, 0.5, 0.5)
     end
@@ -850,6 +1026,7 @@ function Aegis_SBR:RunRotation()
 
     self:SnapshotBuffs()
     self:SnapshotTargetDebuffs()
+    self:SampleTTK()
     self.active:Rotate(cfg)
     UIErrorsFrame:Clear()
 end
@@ -1003,6 +1180,10 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("SPELLS_CHANGED")
+-- A talent point can change a spell's cost without teaching anything (Improved
+-- Sinister Strike and friends are passives), so the cached costs are dropped on
+-- this too rather than trusting SPELLS_CHANGED to cover it.
+ev:RegisterEvent("CHARACTER_POINTS_CHANGED")
 ev:RegisterEvent("CHAT_MSG_COMBAT_SELF_HITS")
 ev:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -1017,6 +1198,8 @@ ev:SetScript("OnEvent", function()
         Aegis_SBR:OnAddonLoaded()
     elseif event == "PLAYER_LOGIN" then
         Aegis_SBR:Banner()
+    elseif event == "CHARACTER_POINTS_CHANGED" then
+        Aegis_SBR.costCache = nil
     elseif event == "SPELLS_CHANGED" then
         -- learning a spell or rank invalidates the spellbook index and any
         -- cached profile validity, both rebuilt lazily on the next use
@@ -1026,6 +1209,9 @@ ev:SetScript("OnEvent", function()
         if Aegis_SBR.active then Aegis_SBR.active:OnSwingMessage(arg1) end
     elseif event == "PLAYER_REGEN_ENABLED" then
         if Aegis_SBR.active then Aegis_SBR.active.lastSwing = nil end
+        -- Out of combat the kill curve is meaningless, and keeping it would let
+        -- the last fight's rate answer the first press of the next one.
+        Aegis_SBR:ResetTTK()
     elseif event == "UNIT_CASTEVENT" then
         -- Only successful casts ("CAST"), and only if the active module wants them.
         if arg3 == "CAST" and Aegis_SBR.active and Aegis_SBR.active.OnCastEvent then

@@ -17,30 +17,67 @@ function M:BuildBody(ui, parent)
     local L = ui:NewLayout(parent)
     local function set(key) return function(v) if ui.buf then ui.buf[key] = v; ui:Refresh() end end end
 
+    -- Grouped by FEATURE, not by spell type. The header carries the context, so
+    -- each row only has to say the one thing that is specific to it - which is
+    -- what lets "Use from" appear under both Eviscerate and Execute without
+    -- ambiguity. Three rules hold throughout:
+    --   * the value column shows the DIRECTION of a threshold, ">=" for a floor
+    --     and "<=" for a ceiling. Four combo-point sliders reading "... CP" with
+    --     two different meanings was the single biggest source of confusion.
+    --   * a slider whose owning toggle is off is greyed, always.
+    --   * the neutral position always reads "off", whichever end of the scale
+    --     it happens to sit on.
+
     -- Surprise Attack belongs with the builders (it AWARDS a combo point), but
     -- it cannot go in the dropdown: that picks the builder you spam, while
     -- Surprise Attack is only castable inside the target's dodge window, so it
     -- rides on top of whichever builder is chosen rather than replacing it.
-    L:Header("Rotation")
+    -- Riposte joins them because it is likewise something you press when no
+    -- finisher is due - it neither spends nor builds combo points.
+    L:Header("Attacks")
     self.builderDD = L:Dropdown("builder", "Builder", 170, set("builder"))
     self.saRow = L:Row{ key = "useSurpriseAttack", label = "Surprise Attack", spell = "Surprise Attack", onToggle = set("useSurpriseAttack") }
-
-    -- Riposte spends no combo points and builds none - a pure reactive strike.
-    L:Header("Reactives")
     self.ripRow = L:Row{ key = "useRiposte", label = "Riposte", spell = "Riposte", onToggle = set("useRiposte") }
 
-    L:Header("Finishers")
+    L:Header("Buffs")
     self.sndRow = L:Row{ key = "useSnd", label = "Slice and Dice", spell = "Slice and Dice", onToggle = set("useSnd") }
     self.envRow = L:Row{ key = "useEnvenom", label = "Envenom", spell = "Envenom", onToggle = set("useEnvenom") }
-    self.renewRow = L:Row{ label = "Refresh the two above at",
+    self.renewRow = L:Row{ label = "Refresh when under",
         slider = { key = "buffRenew", min = 0, max = 2, step = 1, suffix = "s", onChange = set("buffRenew") } }
-    self.rupRow = L:Row{ key = "useRupture", label = "Rupture at CP", spell = "Rupture", onToggle = set("useRupture"),
-        slider = { key = "ruptureCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("ruptureCP") } }
-    self.cpRow = L:Row{ label = "Eviscerate at CP",
+    -- Highest combo point count a refresh may spend. 5 = no ceiling (unchanged
+    -- behaviour). At 1 the two buffs are only ever refreshed with the single
+    -- point Ruthlessness returns and every surplus point goes into Eviscerate -
+    -- the right trade while fights are shorter than a full-length buff, and the
+    -- wrong one in a raid, where the ceiling belongs back at 5.
+    self.refreshMaxRow = L:Row{ label = "Spend at most",
+        slider = { key = "refreshMaxCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("refreshMaxCP") } }
+
+    L:Header("Eviscerate")
+    self.cpRow = L:Row{ label = "Use from",
         slider = { key = "cpFinish", min = 1, max = 5, step = 1, suffix = "", onChange = set("cpFinish") } }
-    self.evisOnlyRow = L:Row{ key = "evisExecuteOnly", label = "Eviscerate only in execute", onToggle = set("evisExecuteOnly") }
-    self.execRow = L:Row{ key = "useExecute", label = "Execute low-HP targets", onToggle = set("useExecute"),
+    self.evisOnlyRow = L:Row{ key = "evisExecuteOnly", label = "Only in execute phase", onToggle = set("evisExecuteOnly") }
+
+    -- Rupture keeps a section of its own rather than sitting with the two buffs
+    -- above: the ceiling there does not apply to it, and putting them together
+    -- would imply it does. Its threshold is a floor, theirs is a ceiling.
+    L:Header("Rupture")
+    self.rupRow = L:Row{ key = "useRupture", label = "Enable from", spell = "Rupture", onToggle = set("useRupture"),
+        slider = { key = "ruptureCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("ruptureCP") } }
+
+    -- Execute is a PHASE with three conditions, not three features. Under one
+    -- header they read as what they are: when it starts, what it may spend, and
+    -- when it is called off again.
+    L:Header("Execute")
+    self.execRow = L:Row{ key = "useExecute", label = "Enable below", onToggle = set("useExecute"),
         slider = { key = "executeHpPct", min = 1, max = 30, step = 1, suffix = "%", onChange = set("executeHpPct") } }
+    -- Lowest combo point count the execute dump may spend. 1 = unchanged.
+    self.execMinRow = L:Row{ label = "Use from",
+        slider = { key = "executeMinCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("executeMinCP") } }
+    -- A brake on the execute above, never a second trigger: when the target is
+    -- measurably going to outlive this many seconds, the low-combo-point dump
+    -- is skipped and the normal build-up continues. 0 switches the brake off.
+    self.execTTKRow = L:Row{ label = "Skip if alive past",
+        slider = { key = "executeTTK", min = 0, max = 8, step = 1, suffix = "s", onChange = set("executeTTK") } }
 
     L:Header("Cooldowns")
     self.cbRow = L:Row{ key = "useColdBlood", label = "Cold Blood with Eviscerate", spell = "Cold Blood", onToggle = set("useColdBlood") }
@@ -90,6 +127,9 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.execRow.cb, "Execute low-HP targets", "Below the health value on the right, Eviscerate fires with whatever combo points are on hand (at least 1) instead of waiting for the normal threshold.", "Ruthlessness guarantees a combo point after any finisher, so this rarely goes unused once a fight is underway.")
     ui:Tip(self.execRow.slider, "Execute below", "Target health percent under which Eviscerate finishes early rather than risk combo points going to waste on a kill.")
     ui:Tip(self.cbRow.cb, "Cold Blood with Eviscerate", "Fires Cold Blood in the same press, right before Eviscerate, so the guaranteed crit lands on your biggest hit. Costs no global cooldown.", "Deliberately tied to Eviscerate rather than used on cooldown: the buff is spent by the next Sinister Strike, Backstab, Ambush, Noxious Assault OR Eviscerate - and Noxious Assault is a builder, so a Cold Blood popped at any other moment is eaten by a builder for a fraction of the damage. Skipped when combo points are below the Eviscerate threshold, so the execute finisher cannot waste the 3 minute cooldown on 1-2 points.")
+    ui:Tip(self.refreshMaxRow.slider, "Spend at most", "Ceiling on the combo points a Slice and Dice or Envenom refresh may spend. Above it the surplus goes into Eviscerate first and the buff is refreshed on the next press with the point Ruthlessness returns.", "Only their DURATION scales with combo points, and duration past the end of the fight is thrown away - measured over 28 dungeon pulls, a fight runs ~20s and the buff carries into the next pull for 0.0s. Set 1 for dungeons, 5 (off) for raids, where the buff runs its full length.")
+    ui:Tip(self.execMinRow.slider, "Use from", "Floor on the combo points the execute dump may spend. Off (1) lets a single point finish.", "Unspent combo points cost nothing when the target dies with them - a 1-point Eviscerate costs a full energy bar's worth for less damage than the builder it replaces. Measured: raising this to 3 lost 0 combo points on kills.")
+    ui:Tip(self.execTTKRow.slider, "Skip if alive past", "Cancels the execute dump when the target is measurably going to live longer than this, so an elite parked at low health does not collect weak finishers.", "A brake only - it can never start the execute phase, which is what the health percentage above is for. Only cancels below the Eviscerate threshold, so a full-value finisher is never held back. The estimate is rough (it was wrong more often than right in testing), which is why it may only ever take the phase away, never grant it.")
     ui:Tip(self.cdRow.cb, "Pop cooldowns", "Use Adrenaline Rush and Blade Flurry every press (off the global cooldown).")
     ui:Tip(self.cdEliteRow.cb, "Auto on elite", "Pop the cooldowns only against elite and boss targets.")
     ui:Tip(self.pcRow.cb, "Poison control", "Master switch for the poison Quick Bar and rebuff buttons (also in the minimap right-click menu). Applies to this character across all rogue profiles.", "Applying a poison needs a real click, so it is always button-driven, never cast from the rotation macro.")
@@ -125,13 +165,18 @@ function M:RefreshBody(ui, buf)
     ui:BindCheck(self.cdRow, buf.popCDs)
     ui:BindCheck(self.cdEliteRow, buf.autoCDElite)
 
+    -- ">=" marks a floor, "<=" a ceiling. Without it four sliders all read
+    -- "... CP" while meaning opposite things, which is exactly how a ceiling
+    -- got mistaken for a floor.
     local cpv = buf.cpFinish or 4
     self.cpRow.slider:SetValue(cpv)
-    if self.cpRow.slider.valText then self.cpRow.slider.valText:SetText(tostring(cpv)) end
+    if self.cpRow.slider.valText then self.cpRow.slider.valText:SetText(">=" .. cpv) end
 
     local rupv = buf.ruptureCP or 3
     self.rupRow.slider:SetValue(rupv)
-    if self.rupRow.slider.valText then self.rupRow.slider.valText:SetText(tostring(rupv)) end
+    if self.rupRow.slider.valText then self.rupRow.slider.valText:SetText(">=" .. rupv) end
+    -- Was live and settable with Rupture switched off, unlike every other row.
+    ui:SliderEnable(self.rupRow.slider, buf.useRupture and true or false)
 
     -- 0 is a valid setting ("only once it has dropped"), so this must not use
     -- `or` with a non-zero fallback - that would silently turn 0 into 3.
@@ -142,6 +187,17 @@ function M:RefreshBody(ui, buf)
     -- Only meaningful while at least one of the two buffs it governs is on.
     ui:SliderEnable(self.renewRow.slider, (buf.useSnd or buf.useEnvenom) and true or false)
 
+    local rmax = buf.refreshMaxCP or 5
+    self.refreshMaxRow.slider:SetValue(rmax)
+    if self.refreshMaxRow.slider.valText then
+        self.refreshMaxRow.slider.valText:SetText(rmax < 5 and ("<=" .. rmax) or "off")
+    end
+    -- Needs a buff to govern, and needs Eviscerate to be available for the
+    -- surplus - with "Eviscerate only in execute" there is nowhere for the
+    -- extra points to go, so the ceiling would do nothing.
+    ui:SliderEnable(self.refreshMaxRow.slider,
+        ((buf.useSnd or buf.useEnvenom) and not buf.evisExecuteOnly) and true or false)
+
     ui:BindCheck(self.evisOnlyRow, buf.evisExecuteOnly)
     ui:SliderEnable(self.cpRow.slider, not buf.evisExecuteOnly)
 
@@ -149,6 +205,21 @@ function M:RefreshBody(ui, buf)
     local execv = buf.executeHpPct or 10
     self.execRow.slider:SetValue(execv)
     if self.execRow.slider.valText then self.execRow.slider.valText:SetText(execv .. "%") end
+
+    local ttkv = buf.executeTTK or 0
+    self.execTTKRow.slider:SetValue(ttkv)
+    if self.execTTKRow.slider.valText then
+        self.execTTKRow.slider.valText:SetText(ttkv > 0 and (ttkv .. "s") or "off")
+    end
+    local emin = buf.executeMinCP or 1
+    self.execMinRow.slider:SetValue(emin)
+    if self.execMinRow.slider.valText then
+        self.execMinRow.slider.valText:SetText(emin > 1 and (">=" .. emin) or "off")
+    end
+    -- Every execute control is meaningless with execute itself switched off.
+    ui:SliderEnable(self.execTTKRow.slider, buf.useExecute and true or false)
+    ui:SliderEnable(self.execRow.slider, buf.useExecute and true or false)
+    ui:SliderEnable(self.execMinRow.slider, buf.useExecute and true or false)
 
     -- Poison-control rows bind to the global Aegis_SBR_BuffUp state, not the
     -- profile buffer, so they are set directly here.
