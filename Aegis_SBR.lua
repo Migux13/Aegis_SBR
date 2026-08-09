@@ -386,7 +386,13 @@ end
 -- ============================================================
 function Aegis_SBR:WeaponEnchant(slot)
     if not GetWeaponEnchantInfo then return false, nil, nil end
-    local hasMH, mhMs, mhCh, _, hasOH, ohMs, ohCh = GetWeaponEnchantInfo()
+    -- Six return values on 1.12, not seven: there is no enchant-id slot between
+    -- the hands on this client. Reading a seventh put hasOH on the off-hand
+    -- EXPIRATION, so WeaponEnchant("off") returned nonsense. Latent until now,
+    -- because the only caller asks for the main hand, where both readings agree.
+    -- The six-value form is the one Aegis_SBR_BuffUp uses and its charge counts
+    -- are confirmed correct in game.
+    local hasMH, mhMs, mhCh, hasOH, ohMs, ohCh = GetWeaponEnchantInfo()
     if slot == "off" then return (hasOH and true or false), ohMs, ohCh end
     return (hasMH and true or false), mhMs, mhCh
 end

@@ -59,6 +59,17 @@ local QB_HALF_W = math.floor((62 - 2 * 4 - 2) / 2)  -- half-button bar width (QB
 local CAPTURE_DELAY = 1.5    -- wait this long after apply before first read
 local CAPTURE_TIMEOUT = 6.0  -- give up after this many seconds
 
+-- Low-charge warning for weapon poisons. A poison does not fade, it is USED UP:
+-- the charge counter is the only advance notice you get, and without it the
+-- first sign of trouble is the poison already being gone mid-fight.
+local POISON_LOW_CHARGES = 5
+-- Blink: a triangle wave over this period, never fading further than the floor
+-- so the label stays readable at every point of the cycle. Slow on purpose -
+-- this is a heads-up, not an alarm, and a fast flash in the middle of the
+-- screen is exhausting to play next to.
+local BLINK_PERIOD    = 1.4
+local BLINK_MIN_ALPHA = 0.35
+
 -- Rebuff-button stack sizing.
 local BTN_W = 184
 local BTN_H = 30
@@ -634,10 +645,33 @@ local function GetButton(index)
 end
 
 local function StyleButton(b, style)
-    if style == "poison" then
+    if style == "gone" then
+        -- Poison is off the weapon entirely - the strongest state on screen.
+        b:SetBackdropColor(0.24, 0.04, 0.04, 0.95); b:SetBackdropBorderColor(1, 0.25, 0.25, 0.95)
+    elseif style == "low" then
+        -- Still applied, but nearly used up.
+        b:SetBackdropColor(0.24, 0.19, 0.02, 0.95); b:SetBackdropBorderColor(1, 0.82, 0.10, 0.95)
+    elseif style == "poison" then
         b:SetBackdropColor(0.13, 0.05, 0.18, 0.95); b:SetBackdropBorderColor(0.7, 0.4, 0.9, 0.9)
     else
         b:SetBackdropColor(0.05, 0.13, 0.18, 0.95); b:SetBackdropBorderColor(0.4, 0.75, 0.95, 0.9)
+    end
+end
+
+-- Pulse a button's alpha, or hold it steady. Driven by the button's own
+-- OnUpdate rather than the module's shared timer, which only ticks once a
+-- second - far too coarse to fade anything smoothly.
+local function SetBlink(b, on)
+    if on then
+        b:SetScript("OnUpdate", function()
+            this.blinkT = math.mod((this.blinkT or 0) + (arg1 or 0), BLINK_PERIOD)
+            local phase = this.blinkT / BLINK_PERIOD
+            local k = (phase < 0.5) and (phase * 2) or ((1 - phase) * 2)
+            this:SetAlpha(BLINK_MIN_ALPHA + (1 - BLINK_MIN_ALPHA) * k)
+        end)
+    else
+        b:SetScript("OnUpdate", nil)
+        b:SetAlpha(1)
     end
 end
 
@@ -668,22 +702,35 @@ local function UpdateButtons()
     local missing = {}
 
     -- Poison rebuff prompts (rogue, poison control on).
+    -- Two states per hand, and the charge count is what separates them:
+    --   gone      - nothing on the weapon. Red.
+    --   low       - still applied, POISON_LOW_CHARGES or fewer left. Yellow,
+    --               blinking, and clickable to top the weapon up before it runs
+    --               dry mid-pull.
+    -- Both keep the existing rule that the poison must actually be in the bags:
+    -- a warning you cannot act on is noise, and a blinking button whose click
+    -- does nothing is worse than no button.
+    --
+    -- charges > 0 is required for the low state on purpose. A TIME-based weapon
+    -- enchant reports 0 charges on Turtle, and without that guard every such
+    -- enchant would sit there blinking "0 left" for its whole duration.
     if db.poisonControl and IsPoisonClass() then
-        local hasMH, _, _, hasOH = GetWeaponEnchantInfo()
-        if db.watchPoisonMH and not hasMH then
-            local nm, idx = GetRebuffPoisonName("mh")
-            if nm and FindPoisonInBags(nm) then
-                table.insert(missing, { label = "|cffdd99ffPoison: Mainhand|r", style = "poison",
-                    action = function() ABU:ApplyPoison(idx, "mh") end })
+        local hasMH, _, mhCharges, hasOH, _, ohCharges = GetWeaponEnchantInfo()
+        local function poisonPrompt(hand, has, charges, watched, label)
+            if not watched then return end
+            local nm, idx = GetRebuffPoisonName(hand)
+            if not (nm and FindPoisonInBags(nm)) then return end
+            if not has then
+                table.insert(missing, { label = "|cffff6060Poison: " .. label .. "|r", style = "gone",
+                    action = function() ABU:ApplyPoison(idx, hand) end })
+            elseif charges and charges > 0 and charges <= POISON_LOW_CHARGES then
+                table.insert(missing, { label = "|cffffd200" .. label .. ": " .. charges .. " left|r",
+                    style = "low", blink = true,
+                    action = function() ABU:ApplyPoison(idx, hand) end })
             end
         end
-        if db.watchPoisonOH and not hasOH then
-            local nm, idx = GetRebuffPoisonName("oh")
-            if nm and FindPoisonInBags(nm) then
-                table.insert(missing, { label = "|cffdd99ffPoison: Offhand|r", style = "poison",
-                    action = function() ABU:ApplyPoison(idx, "oh") end })
-            end
-        end
+        poisonPrompt("mh", hasMH, mhCharges, db.watchPoisonMH, "Mainhand")
+        poisonPrompt("oh", hasOH, ohCharges, db.watchPoisonOH, "Offhand")
     end
 
     -- Watched-buff rebuff prompts (all classes, buff monitor on).
@@ -711,6 +758,7 @@ local function UpdateButtons()
         b:ClearAllPoints()
         b:SetPoint("TOP", UIParent, "TOP", 0, BTN_START_Y - (i - 1) * BTN_SPACING)
         StyleButton(b, data.style)
+        SetBlink(b, data.blink)
         b.text:SetText(data.label)
         b.buffAction = data.action
         b:SetScript("OnClick", function() if this.buffAction then this.buffAction() end end)
