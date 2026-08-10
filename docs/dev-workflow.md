@@ -44,6 +44,44 @@ git worktree remove ../_wt-feature
 A worktree is a second checkout of the same repository in another directory. The
 dev folder keeps `local/integration` the whole time, so live stays valid.
 
+## Never stack a PR on another PR's branch
+
+Every branch is cut from `origin/main`, without exception. Setting a PR's base to
+another open PR's branch looks tidy when two changes touch the same file, but it
+has a failure mode that is silent and easy to miss.
+
+It bit us once and cost a whole release. `#41` was based on `release/v1.1.7`
+because both edited `CHANGELOG.md`, the `README` and the `.toc`. `#38` merged
+`release/v1.1.7` into `main` **without deleting the branch**, so GitHub never
+retargeted `#41` — GitHub only does that when the base branch is deleted on
+merge. `#41` then merged into a branch that no longer flowed anywhere. Every PR
+showed "merged", the work was reviewed and approved, and none of it reached
+`main`. `main` sat on the previous version with a feature and a whole changelog
+section missing, and nothing anywhere said so.
+
+If two branches genuinely collide on `CHANGELOG.md` / `README.md` / the `.toc`,
+resolve it by ORDER, not by stacking: leave the release files out of the feature
+PR entirely and put version, changelog and README into one release PR cut from
+`main` after the feature PRs have landed. A conflict you have to resolve once is
+cheaper than a merge that silently does not happen.
+
+## Delete the branch when the PR merges
+
+Not housekeeping - it is what makes GitHub retarget anything still pointing at
+that branch, and it is what keeps `git branch -r --merged origin/main` usable as
+a check for what has actually landed.
+
+## Verify the merge, do not trust the PR state
+
+"Merged" means merged into the PR's **base**, which is not necessarily `main`.
+After a batch lands, check the product rather than the pull request list:
+
+```bash
+git fetch origin
+git log --oneline <previous-main>..origin/main    # are all the commits there?
+git show origin/main:Aegis_SBR.toc | grep Version # did the version move?
+```
+
 ## After a PR is merged
 
 ```bash
