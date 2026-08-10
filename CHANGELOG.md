@@ -4,6 +4,135 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.1.8 — Rogue combo-point and energy economy, Holy Light gate, poison warning
+
+**Driven by a press log, not by theory.** The rogue trace can be written to SavedVariables, and
+this release is what came out of replaying 2000 logged presses per configuration against the
+priority list. Several conclusions contradicted what the code assumed — including two of our own
+earlier changes, which are reverted here together with the measurements that killed them.
+
+### 🐛 Fixed — time to kill was allowed to *start* the execute phase
+
+The new estimator was wired in as a second execute trigger. That is wrong on any normal mob,
+whose entire life is shorter than a sensible window, so *"dies within 3 seconds"* read true from
+the first measurement onward: **355 of 394** presses with a known TTK fired execute, at any
+target health, mostly on a single combo point.
+
+Target health is once again the only thing that starts the execute phase. Time may only ever
+take it **away**, and only below the finisher threshold, so a full-value finisher is never held
+back and *Eviscerate only in execute* keeps working on a boss.
+
+The estimate does not justify anything stronger. Measured against how long fights actually ran,
+**more than half** of its "dies within 3s" calls were still being fought six seconds later. That
+is good enough to veto an action and nowhere near good enough to trigger one.
+
+### ✨ Rogue — a combo-point ceiling for the maintained buffs
+
+Only the *duration* of *Slice and Dice* and *Envenom* scales with combo points, and duration past
+the end of the fight is thrown away. Over 28 dungeon pulls: a fight runs ~20s, the gap to the next
+~20s more, and the buff carries into the next pull a median of **0.0 seconds**.
+
+**Spend at most** caps what a refresh may spend; the surplus goes into *Eviscerate* and the buff is
+refreshed on the next press with the point *Ruthlessness* returns. At 1 the buffs went out at one
+combo point in **83 of 88** refreshes and **not once** at four or five. It belongs at 5 (off) in a
+raid, where the buff runs its full length.
+
+Note the direction, because the opposite was tried first. A combo-point **floor** was built on the
+theory that a longer buff is cheaper per second of uptime. Measured over 1355 presses: Envenom
+uptime fell from **84% to 61%** and the rotation pinned itself at two combo points, because
+reaching a floor costs a builder global cooldown during which the buff is simply down. The floor is
+gone, and the code carries a comment saying why so it does not come back.
+
+Short energy no longer falls through to an expensive refresh — that produced exactly the five-point
+buff the ceiling exists to prevent, at 21 energy against a cost of 30, which is under a second of
+regeneration. The press is held instead, with the buff itself as the valve: once it has actually
+dropped there is nothing left to protect.
+
+### ✨ Rogue — a floor for the execute dump, and an energy check on Cold Blood
+
+Unspent combo points are not a loss when the target dies with them, while a 1-point *Eviscerate*
+costs a full finisher's energy for less damage than the builder it displaces. **Use from** sets a
+floor: raising it to 3 removed 36 of 38 such presses and lost a median of **0 combo points** on
+kills.
+
+*Cold Blood* is free and off the global cooldown so it always "succeeds"; the *Eviscerate* behind it
+does not, and one that fails leaves a three-minute cooldown to be eaten by the next builder. Of ten
+presses where it was ready at the finisher threshold, **five** could not have paid for the
+*Eviscerate*.
+
+### 🔧 Rogue panel — grouped by feature
+
+Reported as confusing, and it had earned it: one section named *Finishers* had grown to nine rows
+carrying **four** combo-point sliders — one ceiling and three floors — every one labelled "... CP"
+with nothing to tell them apart. A ceiling had already been mistaken for a floor once.
+
+Now grouped as **Attacks · Buffs · Eviscerate · Rupture · Execute · Cooldowns · Poisons**, so the
+header carries the context and each row states only what is specific to it. Three rules hold
+throughout: the value column shows direction (`>=` for a floor, `<=` for a ceiling); a slider whose
+toggle is off is greyed (*Rupture at CP* was the one that was not — fully settable and completely
+inert for anyone playing without Rupture); and the neutral position always reads "off", whichever
+end of the scale it happens to sit on.
+
+### ✨ Paladin heal — optional Holy Light health gate
+
+A player reported that above the emergency line the heal mode essentially always casts *Holy Light*.
+Confirmed, and not a matter of taste: the efficiency comparison meant to favour *Flash of Light*
+only runs where **both** heals cover the deficit. Flash tops out at 428 base healing against Holy
+Light's 1680, and healing does not start until a unit is 25% down — so Flash is disqualified before
+the comparison ever happens.
+
+**Holy Light only below** (0 = off, default) reserves the big heal for units under a set health
+percent. It bypasses the coverage logic rather than tuning it, because the problem is that coverage
+decides at all, and it applies only while *Flash of Light* is actually castable, so it can never
+leave someone unhealed. The reporting player has since run it at 75-80 and reported a clear drop in
+mana usage.
+
+### 🐛 Fixed — an out-of-range shock swallowed the press (Shaman)
+
+Reported from play at **level 4**, where Earth Shock plus Lightning Bolt is the whole rotation:
+beyond 20 yards nothing happened at all. The rotation puts the shock first, which is correct — but a
+shock reaches 20 yards and Lightning Bolt reaches 30, so in between the shock was chosen, failed
+silently, and the press did nothing even though the filler underneath it would have landed. All
+three shock gates (Enhancement, Elemental, Tank) now require the shock to be in range. Confirmed
+fixed in game.
+
+### ✨ Poisons warn before the weapon runs dry
+
+A poison does not fade, it is used up, and the rebuff button only appeared once it was already gone
+— which in practice means noticing mid-pull. At **five charges or fewer** the button now turns
+yellow, blinks slowly and shows the count, and clicking it tops the weapon up; once the poison is
+gone it is **red** rather than purple.
+
+The blink is a triangle wave over 1.4s that never fades below 35% opacity — deliberately slow and
+never fully dark, because this is a heads-up and not an alarm. The warning still requires the poison
+to be in your bags (a blinking button whose click does nothing is worse than no button), and
+requires charges above zero, since a *time*-based weapon enchant reports zero charges on Turtle and
+would otherwise blink "0 left" for its whole duration. The shaman's imbue prompt is untouched and
+stays purple.
+
+### 🔧 Under the hood
+
+**Spell costs are read from the spellbook tooltip**, not from a table — talents change costs and
+Turtle rebalances them, so a constant that is wrong by five energy is worse than no check at all.
+Cached per spell and dropped when spells or talents change. Only successful reads are cached, so a
+tooltip that failed to populate once cannot freeze the wrong answer in place. An unreadable cost
+counts as affordable and can never be the reason an ability does not fire.
+
+**A time-to-kill estimate** in the core: percent of maximum health per second over a rolling
+eight-second window, per target, discarded when health goes up or when combat ends. Deliberately a
+plain window rather than the recursive least squares the *TimeToKill* addon uses — that earns its
+keep over a multi-minute boss with phase changes, while the only question asked here is "under a few
+seconds?". It returns nothing until it has four samples over three seconds, and see the warning
+above about how far it can be trusted even then.
+
+**`GetWeaponEnchantInfo` was read with seven return values and a gap** in the core, while
+`Aegis_SBR_BuffUp` reads six. Six is correct on 1.12 — BuffUp's charge counts are confirmed right in
+game — so the core was putting the off-hand flag on the off-hand *expiration* and
+`WeaponEnchant("off")` returned nonsense. Latent, because its only caller asks for the main hand,
+where both readings agree.
+
+---
+
 ## v1.1.7 — Shaman totem + imbue overhaul, per-context buff lists, Paladin melee heal margin
 
 **Two player reports, and what they uncovered.** A shaman reported that a lapsed **Rockbiter**
