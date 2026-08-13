@@ -154,6 +154,137 @@ function Aegis_SBR:CanAfford(name)
     return (UnitMana("player") or 0) >= cost
 end
 
+-- ============================================================
+-- Decide / Perform
+--
+-- A class module may split its rotation in two: Decide(cfg) works out what the
+-- press should do and returns a PLAN without touching the game, and Perform
+-- carries it out. Nothing else changes - Rotate stays the entry point and calls
+-- both - but it lets anything else ask "what would happen if I pressed now?"
+-- without a cast going out. That is what the upcoming-spell window uses.
+--
+-- A plan is:
+--   spell   the one global-cooldown ability, or nil for a deliberate hold
+--   extras  off-GCD casts to fire first, in order (Cold Blood, Adrenaline Rush)
+--   queue   cast through the SuperWoW queue instead, for cast-time spells
+--   reason  short human text, shown in the window
+--
+-- The rule that makes this worth doing: Decide must have NO side effects, so
+-- calling it four times a second for a preview cannot disturb the rotation.
+-- Timers stamped after a cast belong in Perform or in the caller, never in
+-- Decide.
+-- ============================================================
+function Aegis_SBR:Perform(mod, plan)
+    if not plan then return end
+    -- Routed through the two-mode terminal operations, so a module that builds
+    -- an explicit plan behaves the same under a preview as one that calls Pick
+    -- directly in its body.
+    if plan.extras then
+        for i = 1, table.getn(plan.extras) do mod:PickExtra(plan.extras[i]) end
+    end
+    if not plan.spell then return end
+    if plan.queue then mod:PickQueue(plan.spell, plan.reason)
+    else mod:Pick(plan.spell, plan.reason) end
+end
+
+-- What the rotation would do right now, without doing it. nil when the active
+-- class has not been converted yet, or when there is no profile.
+-- ------------------------------------------------------------
+-- One rotation body, two modes.
+--
+-- A module's priority list has to answer two questions: "do it" when the
+-- button is pressed, and "what would you do" four times a second for the
+-- preview window. Keeping two versions of a priority list would guarantee they
+-- drift apart, and rewriting each list into one that returns a plan means
+-- touching every branch of every class - which is exactly where a rotation
+-- gets changed by accident.
+--
+-- So the SAME body runs in both modes and only the terminal operations differ:
+--
+--   Pick / PickQueue  the one global-cooldown ability. Casts, or records.
+--   PickExtra         an off-GCD cast that does not end the press.
+--   Later(fn)         a state change - a timer stamp, an expiry reset. Runs on
+--                     a real press only; a preview must never mutate anything.
+--
+-- Pick returns exactly what Cast returned before it (false when the spell is
+-- not known), so control flow through a priority list is untouched.
+--
+-- The flags live on Aegis_SBR itself, never on the module: modules inherit
+-- from it, so a module reading self.deciding finds the core's value, and there
+-- is only ever one mode in play.
+-- ------------------------------------------------------------
+function Aegis_SBR:Pick(name, reason)
+    if not name or not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name
+        p.reason = reason
+        return true
+    end
+    -- Counts real presses. The preview window uses it to know when the answer
+    -- has legitimately changed, instead of redrawing on every sub-second wobble.
+    Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    CastSpellByName(name)
+    return true
+end
+
+function Aegis_SBR:PickQueue(name, reason)
+    if not name or not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name
+        p.reason = reason
+        p.queue = true
+        return true
+    end
+    -- Counts real presses. The preview window uses it to know when the answer
+    -- has legitimately changed, instead of redrawing on every sub-second wobble.
+    Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
+    return true
+end
+
+function Aegis_SBR:PickExtra(name)
+    if not name or not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        table.insert(Aegis_SBR.decidePlan.extras, name)
+        return true
+    end
+    CastSpellByName(name)
+    return true
+end
+
+function Aegis_SBR:Later(fn)
+    if Aegis_SBR.deciding then return end
+    fn()
+end
+
+-- What the rotation would do right now, without doing it. nil when the class
+-- has not been converted, when there is no profile, or when the run failed -
+-- a preview that errors must never leave the mode flag set, or the next real
+-- press would record instead of cast.
+function Aegis_SBR:Preview()
+    local mod = self.active
+    if not mod or not mod.previewReady then return nil end
+    local cfg = self:GetActiveProfile()
+    if not cfg then return nil end
+    -- The same preparation a real press does. Without it the preview reads
+    -- stale buff and debuff data and takes different branches than the press
+    -- it is supposed to be predicting - which shows up as the window flicking
+    -- between abilities. Both snapshots are pure caches of the current game
+    -- state, so refreshing them here costs nothing and changes nothing.
+    self:SnapshotBuffs()
+    self:SnapshotTargetDebuffs()
+    Aegis_SBR.decidePlan = { extras = {} }
+    Aegis_SBR.deciding = true
+    local ok = pcall(function() mod:Rotate(cfg) end)
+    Aegis_SBR.deciding = false
+    local plan = Aegis_SBR.decidePlan
+    Aegis_SBR.decidePlan = nil
+    if not ok then return nil end
+    return plan
+end
+
 function Aegis_SBR:Cast(name)
     if self:KnowsSpell(name) then CastSpellByName(name); return true end
     return false
@@ -264,6 +395,9 @@ end
 -- not self.trace, or enabling only the log records nothing (the string is
 -- never built, so Trace is never even called).
 function Aegis_SBR:Tracing()
+    -- A preview runs the same body four times a second; letting it trace would
+    -- bury the real presses in the log and make the press log useless.
+    if Aegis_SBR.deciding then return false end
     return (self.trace or self.logging) and true or false
 end
 
@@ -1153,6 +1287,9 @@ function Aegis_SBR:OnAddonLoaded()
     local _, class = UnitClass("player")
     self.active = self.classes[class]
     self:InitDB()
+    -- Saved variables are in by now, so the preview window can restore whether
+    -- it was open. Guarded because the file is optional in the load order.
+    if Aegis_SBR_Preview then Aegis_SBR_Preview:Restore() end
 end
 
 -- Printed once at PLAYER_LOGIN, when the chat frame is ready. ADDON_LOADED
