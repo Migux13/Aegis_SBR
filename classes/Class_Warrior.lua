@@ -27,6 +27,8 @@
 
 local M = Aegis_SBR:NewClassModule("WARRIOR")
 M.uiTitle = "Warrior"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 730
 
 -- Chat output is shared in the core; this shim keeps call sites unchanged.
@@ -255,12 +257,21 @@ end
 
 -- Switch to a named stance if it is learned, not already active, and the
 -- swap cooldown has elapsed. Returns true if a switch was issued.
+-- A stance swap is a press like any other, so under a preview it has to be
+-- reported rather than performed - and its throttle stamp only advances on a
+-- real press.
 function M:SwitchStance(name)
     local idx = self:StanceIndex(name)
     if not idx then return false end
     if self:CurrentStanceName() == name then return false end
     local now = GetTime()
     if now - (self.lastStanceSwap or 0) < STANCE_CD then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name
+        p.reason = "stance dance"
+        return true
+    end
     CastShapeshiftForm(idx)
     self.lastStanceSwap = now
     return true
@@ -279,9 +290,9 @@ end
 
 -- Convenience wrapper that reads the rage cost and stance requirement from
 -- the tables above, then attempts the cast. Returns true if cast.
-function M:Try(name)
+function M:Try(name, reason)
     if self:CanCast(name, RAGE[name], STANCE_REQ[name]) then
-        return self:Cast(name)
+        return self:Pick(name, reason)
     end
     return false
 end
@@ -376,7 +387,7 @@ function M:Rotate(cfg)
     --     never while a Charge opener is pending - see chargePending above.
     if cfg.useBloodrage and not chargePending and self:KnowsSpell("Bloodrage")
         and self:IsReady("Bloodrage") and rage < (cfg.bloodrageRage or 30) then
-        CastSpellByName("Bloodrage")
+        self:PickExtra("Bloodrage")
     end
 
     -- 0b. Burst cooldowns, gated by the pop mode and (for the offensive
@@ -384,28 +395,28 @@ function M:Rotate(cfg)
     local popBurst = cfg.popCDs or (cfg.autoCDElite and isElite)
     if popBurst and inCombat then
         if cfg.useDeathWish and self:KnowsSpell("Death Wish") and self:IsReady("Death Wish") then
-            self:Cast("Death Wish")
+            self:PickExtra("Death Wish")
         end
         if cfg.useRecklessness and self:InStance("Berserker Stance")
             and self:KnowsSpell("Recklessness") and self:IsReady("Recklessness") then
-            self:Cast("Recklessness")
+            self:PickExtra("Recklessness")
         end
         if cfg.useBerserkerRage and self:InStance("Berserker Stance")
             and self:KnowsSpell("Berserker Rage") and self:IsReady("Berserker Rage") then
-            self:Cast("Berserker Rage")
+            self:PickExtra("Berserker Rage")
         end
     end
 
     -- 0c. Sweeping Strikes for cleave windows (off the GCD).
     if aoe and cfg.useSweeping and self:KnowsSpell("Sweeping Strikes")
         and self:InAnyStance(STANCE_REQ["Sweeping Strikes"]) and self:IsReady("Sweeping Strikes") then
-        self:Cast("Sweeping Strikes")
+        self:PickExtra("Sweeping Strikes")
     end
 
     -- 0d. Shield Block to feed Revenge / mitigate (Defensive only, off GCD).
     if cfg.useShieldBlock and self:InStance("Defensive Stance")
         and self:KnowsSpell("Shield Block") and self:IsReady("Shield Block") then
-        self:Cast("Shield Block")
+        self:PickExtra("Shield Block")
     end
 
     -- 0e. Rage dump on the next swing. Suppressed during the execute phase
@@ -413,10 +424,15 @@ function M:Rotate(cfg)
     --     (and known), otherwise Heroic Strike.
     if cfg.useHeroicStrike and not inExecute and rage >= (cfg.dumpRage or 60)
         and (now - (self.lastDump or 0)) > DUMP_THROTTLE then
+        -- The throttle stamp is a state change, so it waits for a real press.
         if aoe and cfg.useCleave and self:KnowsSpell("Cleave") then
-            CastSpellByName("Cleave"); self.lastDump = now
+            if self:PickExtra("Cleave") then
+                self:Later(function() self.lastDump = now end)
+            end
         elseif self:KnowsSpell("Heroic Strike") then
-            CastSpellByName("Heroic Strike"); self.lastDump = now
+            if self:PickExtra("Heroic Strike") then
+                self:Later(function() self.lastDump = now end)
+            end
         end
     end
 
@@ -432,7 +448,7 @@ function M:Rotate(cfg)
     if chargePending then
         if self:InStance("Battle Stance") then
             if self:IsReady("Charge") then
-                if self:Cast("Charge") then return end
+                if self:Pick("Charge", "opener, out of melee") then return end
             end
         elseif cfg.stanceDance or cfg.homeStance == "battle" then
             if self:SwitchStance("Battle Stance") then return end
@@ -444,8 +460,10 @@ function M:Rotate(cfg)
     if cfg.useRevenge and self:KnowsSpell("Revenge") and now < (self.revengeExpiry or 0)
         and self:IsReady("Revenge") and rage >= RAGE["Revenge"] then
         if self:InStance("Defensive Stance") then
-            self.revengeExpiry = 0
-            if self:Cast("Revenge") then return end
+            if self:Pick("Revenge", "block/dodge/parry window") then
+                self:Later(function() self.revengeExpiry = 0 end)
+                return
+            end
         elseif cfg.stanceDance and cfg.homeStance == "defensive" then
             if self:SwitchStance("Defensive Stance") then return end
         end
@@ -453,15 +471,17 @@ function M:Rotate(cfg)
 
     -- 1b. Execute below 20% (highest single-target priority per design).
     if inExecute then
-        if self:Try("Execute") then return end
+        if self:Try("Execute", "target below 20%") then return end
     end
 
     -- 1c. Overpower (Battle), reactive. Stance-dance in when enabled.
     if cfg.useOverpower and self:KnowsSpell("Overpower") and now < (self.overpowerExpiry or 0)
         and self:IsReady("Overpower") and rage >= RAGE["Overpower"] then
         if self:InStance("Battle Stance") then
-            self.overpowerExpiry = 0
-            if self:Cast("Overpower") then return end
+            if self:Pick("Overpower", "target dodged") then
+                self:Later(function() self.overpowerExpiry = 0 end)
+                return
+            end
         elseif cfg.stanceDance then
             if self:SwitchStance("Battle Stance") then return end
         end
@@ -469,9 +489,9 @@ function M:Rotate(cfg)
 
     -- 1d. Primary strike on cooldown. Usually only one of these is known /
     --     talented for a given spec, so order between them rarely matters.
-    if cfg.useShieldSlam   and self:Try("Shield Slam")   then return end
-    if cfg.useBloodthirst  and self:Try("Bloodthirst")   then return end
-    if cfg.useMortalStrike and self:Try("Mortal Strike") then return end
+    if cfg.useShieldSlam   and self:Try("Shield Slam", "primary strike")   then return end
+    if cfg.useBloodthirst  and self:Try("Bloodthirst", "primary strike")   then return end
+    if cfg.useMortalStrike and self:Try("Mortal Strike", "primary strike") then return end
 
     -- 1d0. Master Strike (Arms talent, opt-in - off by default as it is mainly a
     --      PvP pick). Placed directly BELOW the spec's primary strike so enabling
@@ -480,7 +500,7 @@ function M:Rotate(cfg)
     --      spell, so KnowsSpell sees it only once talented. No stance entry in
     --      STANCE_REQ (unverified), so it is not stance-gated - report back if it
     --      turns out to be Battle/Berserker only.
-    if cfg.useMasterStrike and self:Try("Master Strike") then return end
+    if cfg.useMasterStrike and self:Try("Master Strike", "filler strike") then return end
 
     -- 1d1. Battle Shout upkeep (party attack-power buff). Refreshed only when it
     --      is missing or about to expire, and BELOW the strikes so it never
@@ -492,7 +512,7 @@ function M:Rotate(cfg)
         local up = self:HasBuff("Battle Shout")
         local bt = self:BuffTime("Battle Shout")
         if not up or (bt > 0 and bt < BSHOUT_RENEW) then
-            if self:Cast("Battle Shout") then return end
+            if self:Pick("Battle Shout", up and "about to expire" or "missing") then return end
         end
     end
 
@@ -502,7 +522,7 @@ function M:Rotate(cfg)
     if cfg.useDemoShout and not inExecute
         and self:CanCast("Demoralizing Shout", RAGE["Demoralizing Shout"], nil)
         and not Aegis_SBR:TargetDebuffUp("Demoralizing Shout", "Ability_Warrior_WarCry") then
-        if self:Cast("Demoralizing Shout") then return end
+        if self:Pick("Demoralizing Shout", "not on target") then return end
     end
 
     -- 1d2. Rend bleed upkeep (toggle; a leveling tool, off by default). Battle
@@ -514,29 +534,29 @@ function M:Rotate(cfg)
         and not self:TargetIsBleedImmune()
         and self:CanCast("Rend", RAGE["Rend"], STANCE_REQ["Rend"])
         and not Aegis_SBR:TargetDebuffUp("Rend", "ability_rend") then
-        if self:Cast("Rend") then return end
+        if self:Pick("Rend", "bleed missing") then return end
     end
 
     -- 1e. Whirlwind: on cooldown in AoE, or as a single-target rage dump
     --     when rage is running high. Berserker stance only.
     if cfg.useWhirlwind and self:CanCast("Whirlwind", RAGE["Whirlwind"], STANCE_REQ["Whirlwind"]) then
         if aoe or rage >= (cfg.wwExcess or 60) then
-            if self:Cast("Whirlwind") then return end
+            if self:Pick("Whirlwind", aoe and "AoE" or "rage dump") then return end
         end
     end
 
     -- 1f. Thunder Clap for AoE (Battle stance in 1.12).
-    if aoe and cfg.useThunderClap and self:Try("Thunder Clap") then return end
+    if aoe and cfg.useThunderClap and self:Try("Thunder Clap", "AoE") then return end
 
     -- 1g. Sunder Armor upkeep (threat / armor reduction).
     if cfg.useSunder and self:CanCast("Sunder Armor", RAGE["Sunder Armor"], nil)
         and self:NeedSunder(cfg) then
-        if self:Cast("Sunder Armor") then return end
+        if self:Pick("Sunder Armor", "stack upkeep") then return end
     end
 
     -- 1h. Slam filler (Arms). Has a cast time and resets the swing timer,
     --     so it suits 2H builds and may feel awkward with heavy spam.
-    if cfg.useSlam and self:Try("Slam") then return end
+    if cfg.useSlam and self:Try("Slam", "filler") then return end
 
     -- 1i. Drift back to the home stance when nothing reactive is pending.
     if cfg.stanceDance and cfg.homeStance ~= "none" then

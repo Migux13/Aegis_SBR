@@ -37,6 +37,8 @@
 
 local M = Aegis_SBR:NewClassModule("PRIEST")
 M.uiTitle = "Priest"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 680
 M.meleeAutoAttack = false   -- caster, no white melee swing
 
@@ -247,6 +249,11 @@ end
 function M:Wand()
     if self:Wanding() then return true end
     if not self:HasWand() then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = "Shoot"; p.reason = "wanding"
+        return true
+    end
     CastSpellByName("Shoot")
     return true
 end
@@ -262,8 +269,13 @@ end
 -- ============================================================
 -- Cast / DoT helpers (mirror the warlock caster pattern)
 -- ============================================================
-function M:Queue(name)
+function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason; p.queue = true
+        return true
+    end
     if self:Wanding() or not QueueSpellByName then
         CastSpellByName(name)
     else
@@ -312,8 +324,8 @@ function M:ApplyDot(spellName, texFrag, interval)
     if rec and rec.id == id and rec.t and (now - rec.t) <= interval then
         if detectable then return "wait" else return "up" end
     end
-    self.dotThrottle[spellName] = { id = id, t = now }
-    self:Queue(spellName)
+    if not self:Queue(spellName, "DoT missing") then return "up" end
+    self:Later(function() self.dotThrottle[spellName] = { id = id, t = now } end)
     return "cast"
 end
 
@@ -321,9 +333,11 @@ end
 -- Healing engine (adapted from the paladin; self-contained).
 -- ============================================================
 function M:CommitHeal(unit, amount, castTime)
-    self.healTarget = UnitName(unit)
-    self.healAmount = amount or 0
-    self.healUntil = GetTime() + (castTime or 0) + 1.0
+    self:Later(function()
+        self.healTarget = UnitName(unit)
+        self.healAmount = amount or 0
+        self.healUntil = GetTime() + (castTime or 0) + 1.0
+    end)
 end
 
 function M:PendingFor(unit)
@@ -428,7 +442,15 @@ function M:PickRank(baseName, effHeals, manas, deficit, mana)
 end
 
 -- Cast a heal on a unit without dropping the current target (SuperWoW unit arg).
-function M:CastOn(spell, unit)
+-- Targeted heal. Under a preview it is reported rather than cast; the unit
+-- goes into the reason so the window says who would be healed.
+function M:CastOn(spell, unit, reason)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
+        return
+    end
     CastSpellByName(spell, unit)
 end
 
@@ -473,9 +495,9 @@ function M:DoHeal(cfg)
         and self:HurtCount(ratio) >= (cfg.prayerCount or 3) then
         if cfg.useInnerFocus and self:KnowsSpell("Inner Focus") and self:OwnCDReady("Inner Focus")
             and not self:HasBuff("Inner Focus") then
-            self:Cast("Inner Focus"); return true
+            self:Pick("Inner Focus", "free cast next"); return true
         end
-        self:Queue("Prayer of Healing"); return true
+        self:Queue("Prayer of Healing", "group healing"); return true
     end
 
     -- Emergency: a target near death gets Flash Heal (reserved for this so it
@@ -532,7 +554,7 @@ function M:Rotate(cfg)
 
     -- Keep Inner Fire up in any mode (it is cheap and always wanted).
     if cfg.useInnerFire and self:KnowsSpell("Inner Fire") and not self:HasBuff("Inner Fire") then
-        if self:Cast("Inner Fire") then return end
+        if self:Pick("Inner Fire", "buff missing") then return end
     end
 
     -- ---------------- HEAL MODE ----------------
@@ -544,7 +566,7 @@ function M:Rotate(cfg)
         -- combat so it is not wasted mid-pull).
         if cfg.useLightwell and self:KnowsSpell("Lightwell") and self:OwnCDReady("Lightwell")
             and not self.inCombat then
-            if self:Cast("Lightwell") then return end
+            if self:Pick("Lightwell", "off cooldown") then return end
         end
 
         -- Offensive weave: only with an attackable target and out of Shadowform.
@@ -554,7 +576,7 @@ function M:Rotate(cfg)
                 local r = self:ApplyDot("Holy Fire", "Spell_Holy_SearingLight", 4)
                 if r == "cast" or r == "wait" then return end
             end
-            if self:Queue("Smite") then return end
+            if self:Queue("Smite", "filler nuke") then return end
         end
         return
     end
@@ -562,7 +584,7 @@ function M:Rotate(cfg)
     -- ---------------- DPS MODE (shadow / leveling) ----------------
     -- Shadowform upkeep (optional).
     if cfg.useShadowform and self:KnowsSpell("Shadowform") and not shadowform then
-        if self:Cast("Shadowform") then return end
+        if self:Pick("Shadowform", "form missing") then return end
     end
 
     -- Power Word: Shield mitigation: when a mob is in melee or you are taking
@@ -571,7 +593,7 @@ function M:Rotate(cfg)
         and not self:HasBuff("Power Word: Shield")
         and not self:UnitHasAura("player", "Weakened Soul", true, nil)
         and (self:InMeleeRange() or self:PlayerHPPct() < 50) then
-        if self:Cast("Power Word: Shield") then return end
+        if self:Pick("Power Word: Shield", "shield missing") then return end
     end
 
     -- Everything below needs an attackable target.
@@ -583,16 +605,16 @@ function M:Rotate(cfg)
     -- (and the experience), Mind Blast then Smite.
     if cfg.useSpiritTapFinisher and self:TargetHPPct() < (cfg.executeHp or 25) then
         if cfg.useMindBlast and self:KnowsSpell("Mind Blast") and self:IsReady("Mind Blast") then
-            if self:Queue("Mind Blast") then return end
+            if self:Queue("Mind Blast", "on cooldown") then return end
         end
         if not shadowform and self:KnowsSpell("Smite") then
-            if self:Queue("Smite") then return end
+            if self:Queue("Smite", "filler nuke") then return end
         end
     end
 
     -- Mind Blast on cooldown: the Shadow Weaving trigger and a strong nuke.
     if cfg.useMindBlast and self:KnowsSpell("Mind Blast") and self:IsReady("Mind Blast") then
-        if self:Queue("Mind Blast") then return end
+        if self:Queue("Mind Blast", "on cooldown") then return end
     end
 
     -- Damage-over-time upkeep.
@@ -620,14 +642,14 @@ function M:Rotate(cfg)
 
     -- Mind Flay filler (a channel; counts as a cast) while mana is healthy.
     if cfg.useMindFlay and cfg.filler ~= "Wand" and self:KnowsSpell("Mind Flay") and manaOK then
-        if self:Queue("Mind Flay") then return end
+        if self:Queue("Mind Flay", "channel filler") then return end
     end
 
     -- The chosen spell filler while mana is healthy -- or always, when there is
     -- no wand to drop to for regen (so disabling the wand keeps it casting).
     local fill = cfg.filler or "Wand"
     if fill ~= "Wand" and self:KnowsSpell(fill) and (manaOK or not wandUsable) then
-        if self:Queue(fill) then return end
+        if self:Queue(fill, "filler") then return end
     end
 
     -- Wand for mana regen (the 5-second-rule loop), when usable.
@@ -637,8 +659,8 @@ function M:Rotate(cfg)
     -- an empty press -- Mind Flay if known (works in Shadowform), else Smite out
     -- of Shadowform.
     if not wandUsable then
-        if self:KnowsSpell("Mind Flay") then if self:Queue("Mind Flay") then return end end
-        if not shadowform and self:KnowsSpell("Smite") then if self:Queue("Smite") then return end end
+        if self:KnowsSpell("Mind Flay") then if self:Queue("Mind Flay", "channel filler") then return end end
+        if not shadowform and self:KnowsSpell("Smite") then if self:Queue("Smite", "filler nuke") then return end end
     end
 end
 

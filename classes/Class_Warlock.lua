@@ -45,6 +45,8 @@
 
 local M = Aegis_SBR:NewClassModule("WARLOCK")
 M.uiTitle = "Warlock"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 716
 M.meleeAutoAttack = false   -- caster, no white melee swing
 
@@ -376,8 +378,13 @@ end
 -- completely once the wand was running - IsReady evidently does not clear
 -- reliably while auto-repeat is active on this server, so that gate was a
 -- dead end rather than an optimization. Removed; always act.
-function M:Queue(name)
+function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason; p.queue = true
+        return true
+    end
     if self:Wanding() or not QueueSpellByName then
         CastSpellByName(name)
     else
@@ -576,8 +583,8 @@ M.dotPending = {}
 -- this replaced an earlier version that stamped the throttle optimistically
 -- right here, which is exactly what caused that multi-second stall.
 function M:QueueDot(spellName, id)
-    self.dotPending[spellName] = { id = id, t = GetTime() }
-    self:Queue(spellName)
+    if not self:Queue(spellName, "DoT missing") then return end
+    self:Later(function() self.dotPending[spellName] = { id = id, t = GetTime() } end)
 end
 
 -- Apply or maintain one DoT. Returns:
@@ -616,6 +623,19 @@ function M:ApplyDot(spellName, texFrag, interval)
     end
     self:QueueDot(spellName, id)
     return "cast"
+end
+
+-- Start or stop the wand. Shoot toggles auto-repeat, so casting it while it
+-- is already running is how the rotation stops it - both directions are a real
+-- press and are reported as such.
+function M:Shoot(reason)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = "Shoot"; p.reason = reason
+        return true
+    end
+    CastSpellByName("Shoot")
+    return true
 end
 
 -- ============================================================
@@ -670,15 +690,18 @@ function M:Rotate(cfg)
     if nightfall and cfg.filler ~= "Shadow Bolt" and self:KnowsSpell("Shadow Bolt") then
         if self:ShadowTranceUp() then
             if not self.stConsumed then
-                self.stConsumed = true
-                self.stConsumedAt = GetTime()
-                self:Queue("Shadow Bolt")
-                return
+                if self:Queue("Shadow Bolt", "Nightfall proc") then
+                    self:Later(function()
+                        self.stConsumed = true
+                        self.stConsumedAt = GetTime()
+                    end)
+                    return
+                end
             elseif self.stConsumedAt and (GetTime() - self.stConsumedAt) > 15 then
-                self.stConsumed = false
+                self:Later(function() self.stConsumed = false end)
             end
         else
-            self.stConsumed = false
+            self:Later(function() self.stConsumed = false end)
         end
     end
 
@@ -688,7 +711,7 @@ function M:Rotate(cfg)
     -- P1 Drain Life self-heal: your survival comes first. Channels Drain Life
     -- when you drop below the threshold (the drain-tank safety net).
     if cfg.drainLifeSustain and self:KnowsSpell("Drain Life") and hp < (cfg.drainLifeHp or 35) then
-        self:Queue("Drain Life")
+        self:Queue("Drain Life", "filler, self healing")
         return
     end
 
@@ -696,7 +719,7 @@ function M:Rotate(cfg)
     -- can spare the health (it transfers yours to the pet).
     if cfg.healthFunnel and self:KnowsSpell("Health Funnel") and UnitExists("pet")
         and self:PetHPPct() < (cfg.healthFunnelPetHp or 50) and hp > (cfg.healthFunnelHpMin or 45) then
-        self:Queue("Health Funnel")
+        self:Queue("Health Funnel", "pet is hurt")
         return
     end
 
@@ -707,7 +730,7 @@ function M:Rotate(cfg)
     -- on a dead attempt instead of falling through to Drain Soul or the filler.
     if cfg.useShadowburn and self:KnowsSpell("Shadowburn") and self:IsReady("Shadowburn")
         and thp < (cfg.shadowburnHp or 20) and self:CountSoulShards() > 0 then
-        if self:Queue("Shadowburn") then return end
+        if self:Queue("Shadowburn", "finisher") then return end
     end
 
     -- P4 Drain Soul finisher: channel in the target's last seconds to bank a
@@ -717,7 +740,7 @@ function M:Rotate(cfg)
     -- draining a target you could just finish off with the filler.
     if cfg.useDrainSoul and self:KnowsSpell("Drain Soul") and thp < (cfg.drainSoulHp or 20)
         and (not cfg.keepShards or self:CountSoulShards() < (cfg.shardTarget or 0)) then
-        self:Queue("Drain Soul")
+        self:Queue("Drain Soul", "filler channel")
         return
     end
 
@@ -730,7 +753,7 @@ function M:Rotate(cfg)
     -- can even help you recover.
     if self:ManaPct() < (cfg.wandManaFloor or 15) then
         if cfg.lifeTap and self:KnowsSpell("Life Tap") and hp > (cfg.lifeTapHpMin or 40) then
-            self:Queue("Life Tap")
+            self:Queue("Life Tap", "mana from health")
             return
         end
         if self:HasWand() then
@@ -739,7 +762,7 @@ function M:Rotate(cfg)
                 self:Trace(string.format("wandstart ready=%s mana=%.0f hp=%.0f",
                     tostring(self:IsReady("Shoot")), self:ManaPct(), hp))
             end
-            CastSpellByName("Shoot")
+            self:Shoot("wanding")
             return
         end
     end
@@ -835,7 +858,7 @@ function M:Rotate(cfg)
         and self:OwnCDReady("Dark Harvest") and (UnitMana("player") or 0) >= DH_MANA
     if cfg.lifeTap and self:KnowsSpell("Life Tap") and not dhFirst then
         if self:ManaPct() < (cfg.lifeTapMana or 20) and self:PlayerHPPct() > (cfg.lifeTapHpMin or 40) then
-            self:Queue("Life Tap")
+            self:Queue("Life Tap", "mana from health")
             return
         end
     end
@@ -884,10 +907,13 @@ function M:Rotate(cfg)
                     end
                 end
             end
-            self.dhStart = GetTime()
-            self.dhEnd = self.dhStart + self:DHChannelLength()
-            self.dhTarget = self:TargetId()
-            self:Queue("Dark Harvest")
+            if self:Queue("Dark Harvest", "mana from the channel") then
+                self:Later(function()
+                    self.dhStart = GetTime()
+                    self.dhEnd = self.dhStart + self:DHChannelLength()
+                    self.dhTarget = self:TargetId()
+                end)
+            end
             return
         end
         -- Dark Harvest is on cooldown: fill the gap with the configured choice.
@@ -903,30 +929,30 @@ function M:Rotate(cfg)
             local dhLeft = self:OwnCDLeft("Dark Harvest")
             local dotSafe = not self:DotExpiringSoonBy(order, dsLen)
             if dotSafe and dhLeft >= dsLen then
-                self:Queue("Drain Soul")
+                self:Queue("Drain Soul", "filler channel")
                 return
             end
             gap = "Shoot"   -- not safe right now, ride the wand until it is
         end
 
         if gap == "Drain Life" and self:KnowsSpell("Drain Life") then
-            self:Queue("Drain Life")
+            self:Queue("Drain Life", "filler, self healing")
             return
         end
         if gap == "Shadow Bolt" and self:KnowsSpell("Shadow Bolt") then
-            self:Queue("Shadow Bolt")
+            self:Queue("Shadow Bolt", "filler nuke")
             return
         end
 
         if self:HasWand() then
             if self:DotExpiringSoon(order) then
-                if self:Wanding() then CastSpellByName("Shoot") end -- toggles the repeat off
+                if self:Wanding() then self:Shoot("stopping the wand for a DoT") end -- toggles the repeat off
                 return
             end
             if self:Wanding() then return end
-            CastSpellByName("Shoot")
+            self:Shoot("wanding")
         elseif self:KnowsSpell("Shadow Bolt") then
-            self:Queue("Shadow Bolt")
+            self:Queue("Shadow Bolt", "filler nuke")
         end
         return
     end
@@ -938,12 +964,12 @@ function M:Rotate(cfg)
             -- don't start it) instead of risking the recast racing a shot
             -- already in flight - Shoot toggles the repeat off when cast
             -- again while it is already running.
-            if self:Wanding() then CastSpellByName("Shoot") end
+            if self:Wanding() then self:Shoot("stopping the wand for a DoT") end
             return
         end
         -- spammable wand, only start it if it is not already auto repeating
         if self:Wanding() then return end
-        CastSpellByName("Shoot")
+        self:Shoot("wanding")
     elseif filler == "Drain Soul" then
         -- Same channel caution as the Dark Harvest gap filler, minus the
         -- cooldown half: there is no Dark Harvest to be held up here, only the
@@ -951,17 +977,17 @@ function M:Rotate(cfg)
         -- the rotation. If one would lapse during it, fall through to the wand
         -- (or Shadow Bolt without one) for this press instead.
         if not self:DotExpiringSoonBy(order, self:DSChannelLength()) then
-            self:Queue("Drain Soul")
+            self:Queue("Drain Soul", "filler channel")
             return
         end
         if self:HasWand() then
             if self:Wanding() then return end
-            CastSpellByName("Shoot")
+            self:Shoot("wanding")
         elseif self:KnowsSpell("Shadow Bolt") then
-            self:Queue("Shadow Bolt")
+            self:Queue("Shadow Bolt", "filler nuke")
         end
     elseif filler then
-        self:Queue(filler)
+        self:Queue(filler, "filler")
     end
 end
 

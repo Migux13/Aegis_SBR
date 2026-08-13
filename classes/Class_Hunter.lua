@@ -28,6 +28,8 @@
 
 local M = Aegis_SBR:NewClassModule("HUNTER")
 M.uiTitle = "Hunter"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 850
 M.meleeAutoAttack = false   -- managed here: Auto Shot (ranged) or Attack (melee)
 M.autoAcquireTarget = false -- a ranged class should not auto-pull random mobs; pick targets
@@ -274,11 +276,14 @@ end
 -- that re-pokes periodically, so it can never get permanently stuck needing a
 -- manual target swap (the old bug).
 function M:EnsureAutoShot()
-    if self:AutoShotting() then self.autoShotOn = true; self.autoShotT = GetTime(); return false end
+    if self:AutoShotting() then
+        self:Later(function() self.autoShotOn = true; self.autoShotT = GetTime() end)
+        return false
+    end
     local now = GetTime()
     if self.lastAutoShot and self.lastAutoShot > 0 then
         if (now - self.lastAutoShot) < (self:RangedSpeed() + AUTOSHOT_STALL) then
-            self.autoShotOn = true
+            self:Later(function() self.autoShotOn = true end)
             return false
         end
     else
@@ -287,6 +292,12 @@ function M:EnsureAutoShot()
             and (now - (self.autoShotT or 0)) < (self:RangedSpeed() + AUTOSHOT_STALL) then
             return false
         end
+    end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = "Auto Shot"
+        p.reason = "restarting the shot"
+        return true
     end
     CastSpellByName("Auto Shot")
     self.autoShotOn = true
@@ -297,8 +308,13 @@ end
 
 -- Queue a shot through SuperWoW/Nampower so the weave lands without clipping
 -- the Auto Shot in progress; falls back to a direct cast without the queue.
-function M:Queue(name)
+function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason; p.queue = true
+        return true
+    end
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -357,8 +373,9 @@ function M:MaintainDebuff(name, interval)
     if rec and rec.id == id and rec.t and (now - rec.t) <= (interval or 3) then
         return false
     end
-    self.debuffThrottle[name] = { id = id, t = now }
-    return self:Cast(name)
+    if not self:Pick(name, "debuff missing") then return false end
+    self:Later(function() self.debuffThrottle[name] = { id = id, t = now } end)
+    return true
 end
 
 -- Sting upkeep. Identical bookkeeping to MaintainDebuff, but the stings are
@@ -376,8 +393,9 @@ function M:MaintainSting(name, interval)
     if rec and rec.id == id and rec.t and (now - rec.t) <= (interval or 3) then
         return false
     end
-    self.debuffThrottle[name] = { id = id, t = now }
-    return self:Queue(name)
+    if not self:Queue(name, "sting missing") then return false end
+    self:Later(function() self.debuffThrottle[name] = { id = id, t = now } end)
+    return true
 end
 
 -- ============================================================
@@ -532,11 +550,11 @@ function M:EnsureAspect(cfg, melee)
     if not cfg.useAspect then return false end
     if self.manaAspectActive then
         local ma = self:KnownManaAspect()
-        if ma and not self:HasBuff(ma) then return self:Cast(ma) end
+        if ma and not self:HasBuff(ma) then return self:Pick(ma, "mana aspect") end
         return false
     end
     local want = melee and "Aspect of the Wolf" or (cfg.rangedAspect or "Aspect of the Hawk")
-    if self:KnowsSpell(want) and not self:HasBuff(want) then return self:Cast(want) end
+    if self:KnowsSpell(want) and not self:HasBuff(want) then return self:Pick(want, "aspect upkeep") end
     return false
 end
 
@@ -616,17 +634,17 @@ function M:Rotate(cfg)
 
     local popBurst = cfg.popCDs or (cfg.autoCDElite and isElite)
     if popBurst and inCombat then
-        if self:KnowsSpell("Rapid Fire") and self:IsReady("Rapid Fire") then self:Cast("Rapid Fire") end
-        if self:KnowsSpell("Bestial Wrath") and self:IsReady("Bestial Wrath") then self:Cast("Bestial Wrath") end
+        if self:KnowsSpell("Rapid Fire") and self:IsReady("Rapid Fire") then self:PickExtra("Rapid Fire") end
+        if self:KnowsSpell("Bestial Wrath") and self:IsReady("Bestial Wrath") then self:PickExtra("Bestial Wrath") end
     end
     -- Kill Command is rotational for BM: fire on cooldown in combat (off GCD).
     if cfg.useKillCommand and inCombat and self:KnowsSpell("Kill Command") and self:IsReady("Kill Command") then
-        self:Cast("Kill Command")
+        self:PickExtra("Kill Command")
     end
     -- Baited Shot reaction inside the short window after the pet crits.
     if cfg.useBaitedShot and self:KnowsSpell("Baited Shot")
         and now < (self.petCritUntil or 0) and self:IsReady("Baited Shot") then
-        self:Cast("Baited Shot")
+        self:PickExtra("Baited Shot")
     end
 
     -- ----------------------------------------------------------------
@@ -657,7 +675,7 @@ function M:Rotate(cfg)
     --    cooldown, so it goes out exactly once at the pull.
     if cfg.useAimedOpener and not melee and not self.autoShotOn
         and self:KnowsSpell("Aimed Shot") and self:IsReady("Aimed Shot") then
-        if self:Queue("Aimed Shot") then return end
+        if self:Queue("Aimed Shot", "opener, before Auto Shot") then return end
     end
 
     -- 4. Auto-attack backbone: ranged keeps Auto Shot firing (the mana-free damage
@@ -684,8 +702,10 @@ function M:Rotate(cfg)
             -- remember this application so a sting that never lands (an immune
             -- undead / boss) is learned and not re-cast every cycle.
             local _, guid = UnitExists("target")
-            self.stingTry = { guid = guid, t = GetTime(), name = effectiveSting }
-            self.stingQueuedT = now   -- protect the queued shot from eviction
+            self:Later(function()
+                self.stingTry = { guid = guid, t = GetTime(), name = effectiveSting }
+                self.stingQueuedT = now   -- protect the queued shot from eviction
+            end)
             return
         elseif self.stingQueuedT and (now - self.stingQueuedT) < STING_QUEUE_HOLD then
             -- Sting was just queued but cannot be read on the target yet. Hold
@@ -699,19 +719,22 @@ function M:Rotate(cfg)
     -- 5b. Mend Pet when the pet is hurting (throttled, HoT lasts ~15s).
     if cfg.useMendPet and UnitExists("pet") and self:KnowsSpell("Mend Pet") then
         if self:PetHPPct() < (cfg.mendPetHp or 50) and (now - (self.mendPetT or 0)) > MEND_PET_CD then
-            if self:Cast("Mend Pet") then self.mendPetT = now; return end
+            if self:Pick("Mend Pet", "pet needs healing") then
+                self:Later(function() self.mendPetT = now end)
+                return
+            end
         end
     end
 
     -- 5c. Lock and Load reaction (MM capstone): cast Aimed Shot NOW. The proc
     --     drops its cast time and makes it cleave a line, so it never clips.
     if cfg.useAimedShot and self:KnowsSpell("Aimed Shot") and self:HasBuff("Lock and Load") then
-        if self:Queue("Aimed Shot") then return end
+        if self:Queue("Aimed Shot", "Lock and Load proc") then return end
     end
 
     -- 5d. Immolation Trap on cooldown (Survival, usable in combat on 1.18.1).
     if cfg.useImmolationTrap and self:KnowsSpell("Immolation Trap") and self:IsReady("Immolation Trap") then
-        if self:Cast("Immolation Trap") then return end
+        if self:Pick("Immolation Trap", "on cooldown") then return end
     end
 
     -- ----------------------------------------------------------------
@@ -721,13 +744,18 @@ function M:Rotate(cfg)
         -- Carve: the Survival melee cone AoE (up to 5 targets, shares its cooldown
         -- with Multi-Shot). Leads the melee branch when AoE is toggled on.
         if aoe and cfg.useCarve and self:KnowsSpell("Carve") and self:IsReady("Carve") then
-            if self:Cast("Carve") then return end
+            if self:Pick("Carve", "AoE cleave") then return end
         end
         -- Mongoose Bite reactively after we dodge an enemy attack.
         if cfg.useMongooseBite and self:KnowsSpell("Mongoose Bite")
             and now < (self.dodgeUntil or 0) and self:IsReady("Mongoose Bite") then
-            self.dodgeUntil = 0
-            if self:Cast("Mongoose Bite") then return end
+            -- The window is consumed only if the bite actually goes out, and
+            -- only on a real press - clearing it during a preview would throw
+            -- the proc away without using it.
+            if self:Pick("Mongoose Bite", "dodge window") then
+                self:Later(function() self.dodgeUntil = 0 end)
+                return
+            end
         end
         -- Lacerate bleed upkeep (Turtle Survival): apply/refresh when it falls off.
         if cfg.useLacerate and self:KnowsSpell("Lacerate") then
@@ -735,11 +763,11 @@ function M:Rotate(cfg)
         end
         -- Raptor Strike on cooldown (queues on the next melee swing).
         if cfg.useRaptorStrike and self:KnowsSpell("Raptor Strike") and self:IsReady("Raptor Strike") then
-            if self:Cast("Raptor Strike") then return end
+            if self:Pick("Raptor Strike", "on cooldown") then return end
         end
         -- Wing Clip (optional kite / slow).
         if cfg.useWingClip and self:KnowsSpell("Wing Clip") and self:IsReady("Wing Clip") then
-            if self:Cast("Wing Clip") then return end
+            if self:Pick("Wing Clip", "slow") then return end
         end
         return
     end
@@ -750,10 +778,10 @@ function M:Rotate(cfg)
     -- AoE: Multi-Shot on cooldown (3+ targets), then Volley channel (4+ dense).
     if aoe then
         if cfg.useMultiShot and self:KnowsSpell("Multi-Shot") and self:IsReady("Multi-Shot") then
-            if self:Queue("Multi-Shot") then return end
+            if self:Queue("Multi-Shot", "AoE") then return end
         end
         if cfg.useVolley and self:KnowsSpell("Volley") and self:IsReady("Volley") then
-            if self:Queue("Volley") then return end
+            if self:Queue("Volley", "AoE") then return end
         end
     end
 
@@ -762,20 +790,23 @@ function M:Rotate(cfg)
     -- unlearned, the shots below fill the gap instead - so the cast-time Steady
     -- never clips Auto Shot, yet still goes out 1:1 with each shot.
     if cfg.useSteadyShot and self:KnowsSpell("Steady Shot") and self:SteadyReady() then
-        if self:Queue("Steady Shot") then self.steadyT = GetTime(); return end
+        if self:Queue("Steady Shot", "weave after Auto Shot") then
+            self:Later(function() self.steadyT = GetTime() end)
+            return
+        end
     end
 
     -- Multi-Shot woven into the post-Steady downtime (single-target burst when you
     -- have the GCDs to spare): Auto Shot -> Steady -> Multi-Shot.
     if cfg.useMultiShot and self:KnowsSpell("Multi-Shot") and self:IsReady("Multi-Shot") then
-        if self:Queue("Multi-Shot") then return end
+        if self:Queue("Multi-Shot", "instant") then return end
     end
 
     -- Low-HP finisher: below the floor, instant Arcane Shot burns the mob down
     -- ahead of the mana-gated filler. Runs regardless of the mana gate - it's a kill.
     if cfg.useArcaneShot and self:KnowsSpell("Arcane Shot")
         and targetHP <= STING_HP_FLOOR and self:IsReady("Arcane Shot") then
-        if self:Queue("Arcane Shot") then return end
+        if self:Queue("Arcane Shot", "finishing a low target") then return end
     end
 
     -- Arcane Shot filler: mana-inefficient, so only when mana is plentiful OR when
@@ -785,7 +816,7 @@ function M:Rotate(cfg)
         local autoStale = not (self.lastAutoShot and self.lastAutoShot > 0
             and (now - self.lastAutoShot) < (self:RangedSpeed() + 1.0))
         if self:ManaPct() >= ARCANE_MANA_FLOOR or autoStale then
-            if self:Queue("Arcane Shot") then return end
+            if self:Queue("Arcane Shot", "instant filler") then return end
         end
     end
 
@@ -793,7 +824,7 @@ function M:Rotate(cfg)
     -- mode owns it (it clips Auto Shot otherwise; Lock and Load is the safe path).
     if cfg.useAimedShot and not cfg.aimedOnlyOnProc and not cfg.useAimedOpener
         and self:KnowsSpell("Aimed Shot") and self:IsReady("Aimed Shot") then
-        if self:Queue("Aimed Shot") then return end
+        if self:Queue("Aimed Shot", "on cooldown") then return end
     end
 end
 
