@@ -178,7 +178,7 @@ end
 -- ============================================================
 local function buildPanel()
     local p = CreateFrame("Frame", "Aegis_SBR_MinimapPanel", UIParent)
-    p:SetWidth(232); p:SetHeight(276)
+    p:SetWidth(232); p:SetHeight(296)
     p:SetFrameStrata("DIALOG")
     p:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -315,6 +315,10 @@ local function buildPanel()
         if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp:SetPoisonControl(on) end
     end)
 
+    p.previewCheck = makeCheck(-216, "Upcoming spell window", function(on)
+        if Aegis_SBR_Preview then Aegis_SBR_Preview:SetShown(on) end
+    end)
+
     local cfg = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
     cfg:SetWidth(208); cfg:SetHeight(22)
     cfg:SetPoint("BOTTOM", 0, 12)
@@ -336,6 +340,9 @@ function AM:RefreshPanel()
     p.manualRadio:SetChecked(mode == "manual")
     p.assistRadio:SetChecked(mode == "assist")
     p.assistEdit:SetText((AegisDB and AegisDB.assistTarget) or "")
+    if p.previewCheck and Aegis_SBR_Preview then
+        p.previewCheck:SetChecked(Aegis_SBR_Preview:Enabled())
+    end
     if p.buffMonCheck and Aegis_SBR_BuffUp then
         p.buffMonCheck:SetChecked(Aegis_SBR_BuffUp:BuffMonitorEnabled())
         p.poisonCheck:SetChecked(Aegis_SBR_BuffUp:PoisonControlEnabled())
