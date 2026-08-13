@@ -33,6 +33,8 @@
 
 local M = Aegis_SBR:NewClassModule("SHAMAN")
 M.uiTitle = "Shaman"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 642
 M.meleeAutoAttack = false   -- melee swing is managed per-mode in the module
 
@@ -75,7 +77,7 @@ local MANATIDE_SPELL     = "Mana Tide Totem"
 -- exactly the short-lived ones.
 --
 -- Names are vanilla baselines and want confirming on Turtle with /sbr debug.
--- A wrong name is self-correcting rather than harmful: see TotemBuffUsable.
+-- A wrong name is self-correcting rather than harmful: see TotemBuffNames.
 M.TOTEM_BUFF = {
     ["Strength of Earth Totem"] = "Strength of Earth",
     ["Stoneskin Totem"]         = "Stoneskin",
@@ -92,6 +94,10 @@ M.TOTEM_BUFF = {
 -- absence is believed. Without this the rotation would re-drop every press
 -- during the gap between the cast landing and the buff appearing.
 local TOTEM_APPLY_GRACE = 3
+-- Shortest gap between two drop attempts on the same element slot.
+local TOTEM_RETRY = 1.5
+-- Confirmed casts that produced no aura before the name is written off.
+local TOTEM_MISS_MAX = 2
 
 local TOTEM_REDROP_DEFAULT = 110
 local TOTEM_REDROP = {
@@ -301,14 +307,26 @@ function M:InSpellRange(spell)
     if not UnitExists("target") then return false end
     if not IsSpellInRange then return true end
     local r = IsSpellInRange(spell, "target")
-    if r == nil then return true end
-    return r == 1
+    -- The API answers 1 in range, 0 out of range, and -1 when it cannot judge
+    -- (unknown spell, no range data). ONLY an explicit 0 may block: reading -1
+    -- as "out of range" would silence an ability over a question the client
+    -- refused to answer, which matters most for the melee abilities gated
+    -- below - a tank whose Stormstrike stopped firing would be far worse than
+    -- one that occasionally swings at thin air.
+    if r == 0 then return false end
+    return true
 end
 
 -- Queue a known spell through SuperWoW's cast queue so a cast in progress is
 -- not clipped. Returns true if the spell is known and was issued.
-function M:Queue(name)
+function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    self.pickReason = reason
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = self.pickReason; p.queue = true
+        return true
+    end
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -333,7 +351,10 @@ function M:MaintainFlameShock()
     local detectable = tex or Aegis_SBR:CanResolveDebuffNames()
     local now = GetTime()
     if not detectable and (now - (self.flameT or 0)) < FLAMESHOCK_DUR then return false end
-    if self:Queue("Flame Shock") then self.flameT = now; return true end
+    if self:Queue("Flame Shock", "DoT missing") then
+        self:Later(function() self.flameT = now end)
+        return true
+    end
     return false
 end
 
@@ -387,11 +408,22 @@ function M:ImbueWarn(text)
     if Aegis_SBR_BuffUp and Aegis_SBR_BuffUp:WatchImbueMH() then return end
     local now = GetTime()
     if (now - (self.imbueWarnT or 0)) < 8 then return end   -- own throttle
-    self.imbueWarnT = now
+    self:Later(function() self.imbueWarnT = now end)
     Aegis_SBR:Msg(text, 1, 0.6, 0.2)
 end
 
 -- Returns true if an imbue cast was issued this press.
+-- Placed HIGH in every rotation rather than last, which is where it used to
+-- sit. Rockbiter is a THREAT imbue: every white swing without it is lost aggro,
+-- and a tank that re-applies it only once Stormstrike, the shock, Lightning
+-- Strike and four totem slots all happen to be busy spends most of a pull
+-- generating less threat than it should. Reported from play as "it will do the
+-- full cycle of attack before putting rockbiter on again". The same argument
+-- holds for a missing Windfury on a damage shaman, without the aggro part.
+--
+-- The cost is one global cooldown at most every five minutes, which is why
+-- only the taunt outranks it: losing the mob to a healer beats a second of
+-- weaker threat.
 function M:MaintainImbue(cfg)
     local state = self:ImbueState(cfg)
     if not state then return false end
@@ -402,7 +434,7 @@ function M:MaintainImbue(cfg)
         self:ImbueWarn(spell .. " is missing.")
         return false
     end
-    return self:Cast(spell)
+    return self:Pick(spell, "imbue missing")
 end
 
 function M:RunsWithoutTarget(cfg)
@@ -433,7 +465,9 @@ M.CH_MANA = { 260, 305, 350 }
 M.healPending = {}
 function M:CommitHeal(unit, amount, castTime)
     local n = UnitName(unit) or "?"
-    self.healPending[n] = { amt = amount or 0, t = GetTime() + (castTime or 1.5) }
+    self:Later(function()
+        self.healPending[n] = { amt = amount or 0, t = GetTime() + (castTime or 1.5) }
+    end)
 end
 function M:PendingFor(unit)
     local n = UnitName(unit) or "?"
@@ -534,6 +568,12 @@ function M:PickRank(baseName, effHeals, manas, deficit, mana)
 end
 
 function M:CastOn(spell, unit)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = "on " .. (UnitName(unit) or unit or "?")
+        return
+    end
     CastSpellByName(spell, unit)
 end
 
@@ -564,6 +604,19 @@ end
 -- Totem upkeep on a blind timer (no totem-state API on 1.12), one clock per
 -- element. Re-drop intervals are conservative; tune if Turtle durations differ.
 M.totemT = {}
+-- Confirmed casts, keyed by totem SPELL. UNIT_CASTEVENT only fires for a cast
+-- that actually went out, which is the one honest piece of evidence that a
+-- totem was really placed - Queue() cannot tell us, it reports success as soon
+-- as the spell is merely known.
+M.totemCastT = {}
+-- Last ATTEMPT per element slot, successful or not. Purely a throttle: without
+-- it a totem that cannot be cast (no mana) would claim every single press and
+-- starve the rest of the rotation, because Queue always says yes.
+M.totemTryT = {}
+-- Aura-name bookkeeping, all keyed by spell.
+M.totemBuffBad  = {}   -- name written off for this session
+M.totemBuffMiss = {}   -- confirmed casts that produced no aura
+M.totemMissAt   = {}   -- which confirmed cast a miss was already counted for
 
 -- Every totem name we might drop, mapped to its element slot. Dropping a totem
 -- of one element replaces the previous totem of that element, so a fresh cast
@@ -591,22 +644,50 @@ function M:OnCastEvent(caster, target, spellName)
     local _, myGuid = UnitExists("player")
     if myGuid and caster ~= myGuid then return end
     local slot = self:TotemElementMap()[spellName]
-    if slot then self.totemT[slot] = GetTime() end
+    if slot then
+        self.totemT[slot] = GetTime()
+        self.totemCastT[spellName] = GetTime()
+    end
 end
 
--- Is this totem's aura name trustworthy on this client? A wrong entry in
--- TOTEM_BUFF would otherwise be the worst possible failure: the aura would read
--- as permanently missing and the rotation would re-drop the totem every few
--- seconds forever. So a name is only believed once it has actually been SEEN
--- after a cast; if a totem is dropped and its aura never shows up within the
--- grace window, the name is written off for the session and that totem falls
--- back to the timer - i.e. degrades to the old behaviour instead of spamming.
-function M:TotemBuffUsable(spell)
-    if not self.totemBuffBad then self.totemBuffBad = {} end
-    if not self.totemBuffSeen then self.totemBuffSeen = {} end
-    local buff = self.TOTEM_BUFF[spell]
-    if not buff or self.totemBuffBad[spell] then return nil end
-    return buff
+-- The aura a totem grants, as the CLIENT names it - returned as two candidates
+-- because our table is a guess and the two forms differ per totem for no
+-- discernible reason (Windfury Totem keeps the word, Stoneskin drops it).
+-- Checking the mapped name AND the totem's own spell name removes the guess
+-- from every case where the answer is one of the two.
+--
+-- Returns nil when the aura cannot be used at all:
+--   * no SpellInfo - buff names are resolved through it, so without SuperWoW
+--     every aura reads as missing and the check would re-drop forever
+--   * the name was written off after repeatedly producing no aura
+-- In both cases the caller falls back to the blind timer.
+function M:TotemBuffNames(spell)
+    if not SpellInfo then return nil end
+    if self.totemBuffBad[spell] then return nil end
+    local mapped = self.TOTEM_BUFF[spell]
+    if not mapped then return nil end
+    return mapped, spell
+end
+
+-- One drop attempt, throttled per element slot.
+--
+-- The stamp that governs the redrop interval comes from the cast EVENT when
+-- SuperWoW is present, never from the attempt: Queue reports success for a cast
+-- that never went out (no mana, for instance), and stamping that made the
+-- rotation believe a totem was standing for the whole interval - up to 110
+-- seconds of nothing, which is exactly the "earth totem is not re-placed"
+-- report. Without the event there is no better signal and the attempt has to
+-- stand in, which is the old behaviour on a client that cannot do better.
+function M:TryTotem(key, spell, now)
+    if (now - (self.totemTryT[key] or 0)) < TOTEM_RETRY then return false end
+    -- Cheapest way to avoid a failed cast is not to attempt one. The cost comes
+    -- from the spellbook tooltip, and an unreadable cost counts as affordable,
+    -- so this can never be the reason a totem stays down.
+    if Aegis_SBR.CanAfford and not Aegis_SBR:CanAfford(spell) then return false end
+    if not self:Queue(spell, "totem upkeep") then return false end
+    self:Later(function() self.totemTryT[key] = now end)
+    if not SpellInfo then self:Later(function() self.totemT[key] = now end) end
+    return true
 end
 
 -- Decides whether a totem needs (re)dropping. Two very different questions
@@ -620,30 +701,45 @@ end
 function M:MaintainTotem(key, spell, interval)
     if spell == "" or not self:KnowsSpell(spell) then return false end
     local now = GetTime()
-    local cast = self.totemT[key] or 0
-    local buff = self:TotemBuffUsable(spell)
+    local mapped, own = self:TotemBuffNames(spell)
 
-    if buff then
-        if self:HasBuff(buff) then
-            self.totemBuffSeen[spell] = true   -- name proven on this client
+    if mapped then
+        if self:HasBuff(mapped) or self:HasBuff(own) then
+            self:Later(function() self.totemBuffMiss[spell] = 0 end)
             return false
         end
-        if cast > 0 and (now - cast) < TOTEM_APPLY_GRACE then
-            return false                        -- just dropped, let it register
+        -- Everything below is judged against the CONFIRMED cast of THIS totem,
+        -- not against the element slot's clock. The slot is stamped by any
+        -- totem of that element, so dropping a Tremor Totem by hand made the
+        -- slot look freshly cast - and that used to write off the Stoneskin
+        -- name over an aura that was missing only because a different totem
+        -- was standing in its place.
+        local done = self.totemCastT[spell] or 0
+        if done > 0 and (now - done) < TOTEM_APPLY_GRACE then
+            return false                        -- just placed, let it register
         end
-        if cast > 0 and not self.totemBuffSeen[spell] then
-            -- Dropped it, waited, never saw the aura: the name is wrong here.
-            self.totemBuffBad[spell] = true
-            return false                        -- timer takes over next press
+        -- A cast that produced no aura is counted ONCE per cast, and it takes
+        -- TOTEM_MISS_MAX of them to write the name off. A single miss is not
+        -- evidence: the shaman may simply have walked out of the totem's range
+        -- right after dropping it, which is the very thing this check exists to
+        -- notice. Two casts in a row with no aura is a name problem.
+        if done > 0 and self.totemMissAt[spell] ~= done then
+            local miss = (self.totemBuffMiss[spell] or 0) + 1
+            self:Later(function()
+                self.totemMissAt[spell] = done
+                self.totemBuffMiss[spell] = miss
+            end)
+            if miss >= TOTEM_MISS_MAX then
+                self:Later(function() self.totemBuffBad[spell] = true end)
+                return false                    -- timer takes over next press
+            end
         end
-        if self:Queue(spell) then self.totemT[key] = now; return true end
-        return false
+        return self:TryTotem(key, spell, now)
     end
 
     if not interval then interval = TOTEM_REDROP[spell] or TOTEM_REDROP_DEFAULT end
-    if (now - cast) < interval then return false end
-    if self:Queue(spell) then self.totemT[key] = now; return true end
-    return false
+    if (now - (self.totemT[key] or 0)) < interval then return false end
+    return self:TryTotem(key, spell, now)
 end
 
 -- Unified totem upkeep for every spec: drops the configured totem in each of
@@ -669,11 +765,16 @@ function M:MaintainFireTotems(cfg)
     if not haveNova and not haveMagma then return false end
 
     if haveNova and self:OwnCDReady(nova) then
-        if self:Queue(nova) then
-            self.totemT["fire"] = GetTime()
+        if self:Queue(nova, "AoE, on cooldown") then
+            -- Same rule as TryTotem: with the cast event the stamp comes from
+            -- the cast that actually happened, not from the attempt.
+            self:Later(function()
+                if not SpellInfo then self.totemT["fire"] = GetTime() end
+                self.totemTryT["fire"] = GetTime()
+            end)
             -- Nova occupies the slot only briefly; letting Magma follow as soon
             -- as it has detonated is the point of the pairing.
-            self.novaUntil = GetTime() + 5
+            self:Later(function() self.novaUntil = GetTime() + 5 end)
             return true
         end
     end
@@ -713,7 +814,7 @@ function M:RotateRestoration(cfg)
     -- Mana Tide Totem when low on mana (the mana cooldown).
     if cfg.useManaTide ~= false and self:KnowsSpell(MANATIDE_SPELL)
         and self:OwnCDReady(MANATIDE_SPELL) and self:ManaPct() <= (cfg.manaTideAt or 25) then
-        if self:Queue(MANATIDE_SPELL) then return end
+        if self:Queue(MANATIDE_SPELL, "mana low") then return end
     end
 
     if unit then
@@ -735,7 +836,9 @@ function M:RotateRestoration(cfg)
         end
         if cfg.useNSCombo ~= false and pct <= (cfg.nsHpPct or 40) / 100 then
             local ns = self:NSSpell()
-            if ns and self:OwnCDReady(ns) then self:Cast(ns); return end
+            if ns and self:OwnCDReady(ns) then
+                if self:Pick(ns, "emergency heal") then return end
+            end
         end
 
         -- Single-target emergency: fast Lesser Healing Wave (wins over AoE).
@@ -781,7 +884,7 @@ function M:RotateRestoration(cfg)
     if cfg.weaveDamage and self:ManaPct() >= (cfg.weaveManaFloor or 40)
         and UnitExists("target") and UnitCanAttack("player", "target")
         and not UnitIsDeadOrGhost("target") then
-        if self:KnowsSpell("Lightning Bolt") then self:Queue("Lightning Bolt"); return end
+        if self:KnowsSpell("Lightning Bolt") then self:Queue("Lightning Bolt", "filler"); return end
     end
 end
 
@@ -816,7 +919,7 @@ function M:MaintainShield(cfg)
     if shield == "" or not self:KnowsSpell(shield) then return false end
     -- The shield buff carries the spell's name, so HasBuff(name) detects it.
     if self:HasBuff(shield) then return false end
-    if self:Queue(shield) then return true end
+    if self:Queue(shield, "shield missing") then return true end
     return false
 end
 
@@ -839,42 +942,46 @@ function M:RotateEnhancement(cfg)
     -- P1 shield upkeep
     if self:MaintainShield(cfg) then return end
 
-    -- P2 Bloodlust (self burst), only when enabled and off cooldown, in combat
+    -- P2 weapon imbue, ahead of every damage ability - see MaintainImbue.
+    -- A missing Windfury costs more damage than the global cooldown it takes
+    -- to put back, and from last place it only ever got a press when the whole
+    -- rotation happened to be on cooldown at once.
+    if self:MaintainImbue(cfg) then return end
+
+    -- P3 Bloodlust (self burst), only when enabled and off cooldown, in combat
     if cfg.useBloodlust and self:KnowsSpell("Bloodlust") and UnitAffectingCombat("player")
         and self:IsReady("Bloodlust") and not self:HasBuff("Bloodlust") then
-        if self:Queue("Bloodlust") then return end
+        if self:Queue("Bloodlust", "burst") then return end
     end
 
-    -- P3 Stormstrike: applies the +20% Nature self-buff for the next shocks
-    if cfg.useStormstrike and self:KnowsSpell("Stormstrike") and self:IsReady("Stormstrike") then
-        if self:Queue("Stormstrike") then return end
+    -- P4 Stormstrike: applies the +20% Nature self-buff for the next shocks
+    if cfg.useStormstrike and self:KnowsSpell("Stormstrike") and self:IsReady("Stormstrike")
+        and self:InSpellRange("Stormstrike") then
+        if self:Queue("Stormstrike", "on cooldown") then return end
     end
 
-    -- P4 Lightning Strike: melee instant that also empowers the active shield
-    if cfg.useLightningStrike and self:KnowsSpell("Lightning Strike") and self:IsReady("Lightning Strike") then
-        if self:Queue("Lightning Strike") then return end
+    -- P5 Lightning Strike: melee instant that also empowers the active shield
+    if cfg.useLightningStrike and self:KnowsSpell("Lightning Strike") and self:IsReady("Lightning Strike")
+        and self:InSpellRange("Lightning Strike") then
+        if self:Queue("Lightning Strike", "on cooldown") then return end
     end
 
-    -- P5 shock on its (shared) cooldown, consuming the Stormstrike buff
+    -- P6 shock on its (shared) cooldown, consuming the Stormstrike buff
     if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock)
         and self:InSpellRange(shock) then
         if shock == "Flame Shock" then
             if self:MaintainFlameShock() then return end
         else
-            if self:Queue(shock) then return end
+            if self:Queue(shock, "on cooldown") then return end
         end
     end
 
-    -- P6 Totem upkeep (all four elements, timer/cast-event gated, low priority)
+    -- P7 Totem upkeep (all four elements, timer/cast-event gated, low priority)
     if self:MaintainAllTotems(cfg) then return end
 
-    -- Pn weapon imbue: lowest-priority upkeep above the filler. Self-gated in
-    -- MaintainImbue (in combat it acts only with the imbueInCombat opt-in).
-    if self:MaintainImbue(cfg) then return end
-
-    -- P7 Lightning Bolt filler / weave. Also the level 1 damage source.
+    -- P8 Lightning Bolt filler / weave. Also the level 1 damage source.
     if cfg.lbFiller and self:KnowsSpell("Lightning Bolt") then
-        self:Queue("Lightning Bolt")
+        self:Queue("Lightning Bolt", "filler")
     end
 end
 
@@ -894,40 +1001,37 @@ function M:RotateElemental(cfg)
     -- P1 shield upkeep (Water Shield for mana by default)
     if self:MaintainShield(cfg) then return end
 
-    -- P2 Elemental Mastery before a nuke (instant, guarantees a crit -> feeds
+    -- P2 weapon imbue, ahead of the nukes - see MaintainImbue. Deliberately
+    -- ABOVE Elemental Mastery rather than below it: that cooldown is meant to
+    -- sit immediately in front of a damage spell, and nothing should be able
+    -- to slip between the two.
+    if self:MaintainImbue(cfg) then return end
+
+    -- P3 Elemental Mastery before a nuke (instant, guarantees a crit -> feeds
     -- Clearcasting and Electrify), when enabled and off cooldown.
     if cfg.useElementalMastery and self:KnowsSpell("Elemental Mastery")
         and self:IsReady("Elemental Mastery") and not self:HasBuff("Elemental Mastery") then
-        if self:Queue("Elemental Mastery") then return end
+        if self:Queue("Elemental Mastery", "before a nuke") then return end
     end
 
-    -- P3 Flame Shock DoT upkeep (when chosen as the shock)
+    -- P4 Flame Shock DoT upkeep (when chosen as the shock)
     if cfg.shock == "flame" then
         if self:MaintainFlameShock() then return end
     elseif self:ShockSpell(cfg) ~= "" then
         -- a non-Flame shock chosen: cast it on its cooldown as a nuke
         local shock = self:ShockSpell(cfg)
         if self:KnowsSpell(shock) and self:IsReady(shock) and self:InSpellRange(shock) then
-            if self:Queue(shock) then return end
+            if self:Queue(shock, "on cooldown") then return end
         end
     end
 
-    -- P4 Totem upkeep (all four elements)
+    -- P5 Totem upkeep (all four elements)
     if self:MaintainAllTotems(cfg) then return end
-
-    -- P5 weapon imbue: lowest-priority upkeep above the filler, same slot as in
-    -- the melee rotations. Elemental had it only in the targetless pre-pull
-    -- branch, so an imbue lapsing once a fight was under way went unhandled -
-    -- an omission rather than a decision, since every other spec covers both.
-    -- Self-gated in MaintainImbue (in combat it acts only with the
-    -- imbueInCombat opt-in, so by default this warns rather than spending a
-    -- caster's global cooldown).
-    if self:MaintainImbue(cfg) then return end
 
     -- P6 Lightning Bolt filler, the main nuke (builds Electrify). Always the
     -- level 1 fallback.
     if self:KnowsSpell("Lightning Bolt") then
-        self:Queue("Lightning Bolt")
+        self:Queue("Lightning Bolt", "filler")
     end
 end
 
@@ -951,42 +1055,52 @@ function M:RotateTank(cfg)
 
     -- P2 Earthshaker Slam taunt, only when the target is not already on you
     -- (the ability has no effect otherwise). Same idea as the druid Growl pull.
-    if cfg.useTaunt and self:KnowsSpell("Earthshaker Slam") and self:IsReady("Earthshaker Slam") then
+    --
+    -- The range gate is what makes the imbue below reachable at all. A shaman
+    -- tank pulls at range and then closes, and during that run the target is
+    -- not on him yet - so the taunt condition was satisfied, the cast failed
+    -- silently out of range, and the press returned having done nothing. The
+    -- whole approach produced no imbue, no totems and no shield upkeep.
+    if cfg.useTaunt and self:KnowsSpell("Earthshaker Slam") and self:IsReady("Earthshaker Slam")
+        and self:InSpellRange("Earthshaker Slam") then
         if not (UnitExists("targettarget") and UnitIsUnit("targettarget", "player")) then
-            if self:Queue("Earthshaker Slam") then return end
+            if self:Queue("Earthshaker Slam", "taunt") then return end
         end
     end
 
-    -- P3 Stormstrike for the Nature buff that boosts shock threat
-    if cfg.useStormstrike and self:KnowsSpell("Stormstrike") and self:IsReady("Stormstrike") then
-        if self:Queue("Stormstrike") then return end
+    -- P3 weapon imbue, ahead of every damage ability - see MaintainImbue for
+    -- why. Self-gated there: in combat it acts only with the imbueInCombat
+    -- opt-in, otherwise it warns.
+    if self:MaintainImbue(cfg) then return end
+
+    -- P4 Stormstrike for the Nature buff that boosts shock threat
+    if cfg.useStormstrike and self:KnowsSpell("Stormstrike") and self:IsReady("Stormstrike")
+        and self:InSpellRange("Stormstrike") then
+        if self:Queue("Stormstrike", "on cooldown") then return end
     end
 
-    -- P4 Earth Shock (or chosen shock) on cooldown, the primary threat tool
+    -- P5 Earth Shock (or chosen shock) on cooldown, the primary threat tool
     if shock ~= "" and self:KnowsSpell(shock) and self:IsReady(shock)
         and self:InSpellRange(shock) then
         if shock == "Flame Shock" then
             if self:MaintainFlameShock() then return end
         else
-            if self:Queue(shock) then return end
+            if self:Queue(shock, "on cooldown") then return end
         end
     end
 
-    -- P5 Lightning Strike (threat + empowered shield)
-    if cfg.useLightningStrike and self:KnowsSpell("Lightning Strike") and self:IsReady("Lightning Strike") then
-        if self:Queue("Lightning Strike") then return end
+    -- P6 Lightning Strike (threat + empowered shield)
+    if cfg.useLightningStrike and self:KnowsSpell("Lightning Strike") and self:IsReady("Lightning Strike")
+        and self:InSpellRange("Lightning Strike") then
+        if self:Queue("Lightning Strike", "on cooldown") then return end
     end
 
-    -- P6 Totem upkeep (all four elements)
+    -- P7 Totem upkeep (all four elements)
     if self:MaintainAllTotems(cfg) then return end
 
-    -- Pn weapon imbue: lowest-priority upkeep above the filler. Self-gated in
-    -- MaintainImbue (in combat it acts only with the imbueInCombat opt-in).
-    if self:MaintainImbue(cfg) then return end
-
-    -- P7 optional Lightning Bolt filler (off by default for tanks)
+    -- P8 optional Lightning Bolt filler (off by default for tanks)
     if cfg.lbFiller and self:KnowsSpell("Lightning Bolt") then
-        self:Queue("Lightning Bolt")
+        self:Queue("Lightning Bolt", "filler")
     end
 end
 
