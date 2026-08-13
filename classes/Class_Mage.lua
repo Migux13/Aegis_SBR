@@ -33,6 +33,8 @@
 
 local M = Aegis_SBR:NewClassModule("MAGE")
 M.uiTitle = "Mage"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 628
 M.meleeAutoAttack = false   -- caster, no white melee swing
 
@@ -157,6 +159,11 @@ end
 function M:Wand()
     if self:Wanding() then return true end
     if not self:HasWand() then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = "Shoot"; p.reason = "wanding"
+        return true
+    end
     CastSpellByName("Shoot")
     return true
 end
@@ -181,8 +188,13 @@ end
 -- Cast helper: queue a known spell through SuperWoW's cast queue so a cast in
 -- progress is not clipped. Returns true if the spell is known and was issued.
 -- ============================================================
-function M:Queue(name)
+function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason; p.queue = true
+        return true
+    end
     if self:Wanding() or not QueueSpellByName then
         CastSpellByName(name)
     else
@@ -214,14 +226,14 @@ function M:Upkeep(cfg)
     -- Turtle. Kept up when known, off cooldown, and not already active.
     if cfg.useIceBarrier and self:KnowsSpell("Ice Barrier") and self:IsReady("Ice Barrier")
         and not self:HasBuff("Ice Barrier") then
-        if self:Cast("Ice Barrier") then return true end
+        if self:Pick("Ice Barrier", "shield missing") then return true end
     end
 
     -- Mana Shield (optional, off by default): only when enabled, and never
     -- stacked under an active Ice Barrier.
     if cfg.useManaShield and self:KnowsSpell("Mana Shield")
         and not self:HasBuff("Mana Shield") and not self:HasBuff("Ice Barrier") then
-        if self:Cast("Mana Shield") then return true end
+        if self:Pick("Mana Shield", "shield missing") then return true end
     end
 
     -- Evocation: restore mana when low, in combat, and the target is not about
@@ -230,7 +242,7 @@ function M:Upkeep(cfg)
     if cfg.useEvocation and self:KnowsSpell("Evocation") and self:IsReady("Evocation")
         and self:ManaPct() < (cfg.evocAt or 15) and UnitAffectingCombat("player")
         and (not UnitExists("target") or self:TargetHPPct() > 30) then
-        if self:Cast("Evocation") then return true end
+        if self:Pick("Evocation", "mana low") then return true end
     end
     return false
 end
@@ -267,7 +279,7 @@ function M:RotateFrost(cfg)
     -- Mitigation: root the mob when it reaches melee (the leveling kite).
     if cfg.useFrostNova and self:KnowsSpell("Frost Nova") and self:IsReady("Frost Nova")
         and self:InMeleeRange() then
-        if self:Cast("Frost Nova") then return end
+        if self:Pick("Frost Nova", "melee range") then return end
     end
 
     -- Leveling: finish a low mob / regenerate with the wand.
@@ -277,18 +289,18 @@ function M:RotateFrost(cfg)
     -- melee range so it is not spammed at distance.
     if cfg.useConeOfCold and self:KnowsSpell("Cone of Cold") and self:IsReady("Cone of Cold")
         and self:InMeleeRange() then
-        if self:Queue("Cone of Cold") then return end
+        if self:Queue("Cone of Cold", "AoE") then return end
     end
 
     -- Icicles: the Turtle nuke, reset/empowered by freeze effects. Cast whenever
     -- ready; the Frostbite proc from Frostbolt keeps the cooldown resetting.
     if cfg.useIcicles and self:KnowsSpell("Icicles") and self:IsReady("Icicles") then
-        if self:Queue("Icicles") then return end
+        if self:Queue("Icicles", "AoE") then return end
     end
 
     -- Frostbolt filler (primary nuke). Fireball covers levels 1-3 before it.
-    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt"); return end
-    if self:KnowsSpell("Fireball") then self:Queue("Fireball"); return end
+    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt", "main nuke"); return end
+    if self:KnowsSpell("Fireball") then self:Queue("Fireball", "main nuke"); return end
     self:Wand()
 end
 
@@ -301,7 +313,7 @@ function M:RotateFire(cfg)
     -- Mitigation root (leveling kite).
     if cfg.useFrostNova and self:KnowsSpell("Frost Nova") and self:IsReady("Frost Nova")
         and self:InMeleeRange() then
-        if self:Cast("Frost Nova") then return end
+        if self:Pick("Frost Nova", "melee range") then return end
     end
 
     -- Leveling: finish / regenerate with the wand.
@@ -311,13 +323,13 @@ function M:RotateFire(cfg)
     -- nuking, when off cooldown and not already active.
     if cfg.useCombustion and self:KnowsSpell("Combustion") and self:IsReady("Combustion")
         and not self:HasBuff("Combustion") then
-        if self:Cast("Combustion") then return end
+        if self:Pick("Combustion", "burst") then return end
     end
 
     -- Pyroblast opener: only on a near-full-health target, so it is the pull
     -- cast and not a 6s cast stuck mid-fight.
     if cfg.usePyroblast and self:KnowsSpell("Pyroblast") and self:TargetHPPct() >= 85 then
-        if self:Queue("Pyroblast") then return end
+        if self:Queue("Pyroblast", "opener") then return end
     end
 
     -- Scorch: build / maintain Fire Vulnerability up to the chosen stacks. A
@@ -331,8 +343,8 @@ function M:RotateFire(cfg)
             local now = GetTime()
             local recent = (self.scorchId == id) and ((now - (self.scorchT or 0)) < 1.5)
             if not recent then
-                self.scorchT = now; self.scorchId = id
-                if self:Queue("Scorch") then return end
+                self:Later(function() self.scorchT = now; self.scorchId = id end)
+                if self:Queue("Scorch", "debuff stack") then return end
             end
         end
     end
@@ -340,13 +352,13 @@ function M:RotateFire(cfg)
     -- Fire Blast: instant, on cooldown -- extra damage and the movement /
     -- finishing tool.
     if cfg.useFireBlast and self:KnowsSpell("Fire Blast") and self:IsReady("Fire Blast") then
-        if self:Queue("Fire Blast") then return end
+        if self:Queue("Fire Blast", "instant") then return end
     end
 
     -- Fireball filler (primary nuke). Frostbolt covers very early levels if Fire
     -- was somehow picked before Fireball is up.
-    if self:KnowsSpell("Fireball") then self:Queue("Fireball"); return end
-    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt"); return end
+    if self:KnowsSpell("Fireball") then self:Queue("Fireball", "main nuke"); return end
+    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt", "main nuke"); return end
     self:Wand()
 end
 
@@ -358,7 +370,7 @@ function M:RotateArcane(cfg)
     -- Mitigation root (leveling kite).
     if cfg.useFrostNova and self:KnowsSpell("Frost Nova") and self:IsReady("Frost Nova")
         and self:InMeleeRange() then
-        if self:Cast("Frost Nova") then return end
+        if self:Pick("Frost Nova", "melee range") then return end
     end
 
     -- Leveling: finish / regenerate with the wand.
@@ -370,27 +382,27 @@ function M:RotateArcane(cfg)
         local up = self:TargetDebuffUp("Arcane Rupture", "Spell_Arcane_Blast")
             or self:HasBuff("Arcane Rupture")
         if not up then
-            if self:Queue("Arcane Rupture") then return end
+            if self:Queue("Arcane Rupture", "buff missing") then return end
         end
     end
 
     -- Arcane Power: the damage steroid, off cooldown and not already active.
     if cfg.useArcanePower and self:KnowsSpell("Arcane Power") and self:IsReady("Arcane Power")
         and not self:HasBuff("Arcane Power") then
-        if self:Cast("Arcane Power") then return end
+        if self:Pick("Arcane Power", "burst") then return end
     end
 
     -- Arcane Surge: used in the no-haste rotation; skipped while hasted.
     if not self:Hasted() and cfg.useArcaneSurge and self:KnowsSpell("Arcane Surge")
         and self:IsReady("Arcane Surge") then
-        if self:Queue("Arcane Surge") then return end
+        if self:Queue("Arcane Surge", "burst") then return end
     end
 
     -- Arcane Missiles filler (channel). Frostbolt / Fireball cover the early
     -- levels before Missiles is trained.
-    if self:KnowsSpell("Arcane Missiles") then self:Queue("Arcane Missiles"); return end
-    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt"); return end
-    if self:KnowsSpell("Fireball") then self:Queue("Fireball"); return end
+    if self:KnowsSpell("Arcane Missiles") then self:Queue("Arcane Missiles", "main nuke"); return end
+    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt", "main nuke"); return end
+    if self:KnowsSpell("Fireball") then self:Queue("Fireball", "main nuke"); return end
     self:Wand()
 end
 
@@ -404,18 +416,18 @@ function M:RotateAoE(cfg)
     -- Freeze the pack when it reaches melee.
     if cfg.useFrostNova and self:KnowsSpell("Frost Nova") and self:IsReady("Frost Nova")
         and self:InMeleeRange() then
-        if self:Cast("Frost Nova") then return end
+        if self:Pick("Frost Nova", "melee range") then return end
     end
 
     -- Cone of Cold: snare + damage the pack in front of you (not range-gated in
     -- AoE -- you face the pack).
     if cfg.useConeOfCold and self:KnowsSpell("Cone of Cold") and self:IsReady("Cone of Cold") then
-        if self:Queue("Cone of Cold") then return end
+        if self:Queue("Cone of Cold", "AoE") then return end
     end
 
     -- Icicles when ready (strong on a frozen pack).
     if cfg.useIcicles and self:KnowsSpell("Icicles") and self:IsReady("Icicles") then
-        if self:Queue("Icicles") then return end
+        if self:Queue("Icicles", "AoE") then return end
     end
 
     -- Drop to the wand below the mana floor so AoE does not bottom out with no
@@ -425,11 +437,11 @@ function M:RotateAoE(cfg)
     end
 
     -- Arcane Explosion: the PBAoE finisher for every spec.
-    if self:KnowsSpell("Arcane Explosion") then self:Queue("Arcane Explosion"); return end
+    if self:KnowsSpell("Arcane Explosion") then self:Queue("Arcane Explosion", "AoE"); return end
 
     -- Low-level fallback: just nuke the target.
-    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt"); return end
-    if self:KnowsSpell("Fireball") then self:Queue("Fireball"); return end
+    if self:KnowsSpell("Frostbolt") then self:Queue("Frostbolt", "main nuke"); return end
+    if self:KnowsSpell("Fireball") then self:Queue("Fireball", "main nuke"); return end
     self:Wand()
 end
 

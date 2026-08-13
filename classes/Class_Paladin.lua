@@ -16,6 +16,8 @@
 
 local M = Aegis_SBR:NewClassModule("PALADIN")
 M.uiTitle = "Paladin"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 820
 
 -- Chat output is shared in the core; this shim keeps call sites unchanged.
@@ -435,11 +437,17 @@ function M:CastStrike(name, cfg)
         local maxR = self:MaxRank(name)
         local r = self:DownrankFor(name)
         if r and maxR > 0 and r < maxR then
-            CastSpellByName(name .. "(Rank " .. r .. ")")
+            local ranked = name .. "(Rank " .. r .. ")"
+            if Aegis_SBR.deciding then
+                local p = Aegis_SBR.decidePlan
+                p.spell = ranked; p.reason = "downranked to save mana"
+                return true
+            end
+            CastSpellByName(ranked)
             return true
         end
     end
-    return self:Cast(name)
+    return self:Pick(name, "strike")
 end
 
 -- The single strike chosen for this shared-cooldown window. Gated on the two
@@ -536,8 +544,8 @@ function M:HandleSeals(cfg)
     -- (A) Always make sure a new mob carries the (effective) debuff.
     -- Skipped if Judgement is not yet learned.
     if effDebuff ~= "" and canJudge and not self:DebuffEffectivelyUp(effDebuff) then
-        if not self:HasBuff(effDebuff) then return self:Cast(effDebuff) end
-        if self:IsReady("Judgement") then return self:Cast("Judgement") end
+        if not self:HasBuff(effDebuff) then return self:Pick(effDebuff, "debuff seal") end
+        if self:IsReady("Judgement") then return self:Pick("Judgement", "stamp the debuff") end
         return false   -- seal up, waiting for judgement to apply the debuff
     end
 
@@ -550,26 +558,26 @@ function M:HandleSeals(cfg)
         -- the cycle is always finished (get the seal up, judge, back to Seal of
         -- Wisdom), even if mana dips below the floor, so the swap is never wasted.
         if canWeave and self.weaving then
-            if not self:HasBuff(dmg) then return self:Cast(dmg) end
+            if not self:HasBuff(dmg) then return self:Pick(dmg, "weave: damage seal up") end
             if canJudge and self:IsReady("Judgement") then
-                local c = self:Cast("Judgement")
-                self.weaving = false
+                local c = self:Pick("Judgement", "weave: judge, then back to Wisdom")
+                self:Later(function() self.weaving = false end)
                 return c
             end
             return false
         end
         if canWeave and canJudge and self:IsReady("Judgement") and self:ManaPct() >= (cfg.manaWeaveMin or 0) then
-            self.weaving = true
-            return self:Cast(dmg)
+            self:Later(function() self.weaving = true end)
+            return self:Pick(dmg, "weave: starting")
         end
-        self.weaving = false
-        if not self:HasBuff("Seal of Wisdom") then return self:Cast("Seal of Wisdom") end
+        self:Later(function() self.weaving = false end)
+        if not self:HasBuff("Seal of Wisdom") then return self:Pick("Seal of Wisdom", "mana management") end
         return false
     end
 
     -- (C) HP management: hold Seal of Light
     if self.hpMgmtActive then
-        if not self:HasBuff("Seal of Light") then return self:Cast("Seal of Light") end
+        if not self:HasBuff("Seal of Light") then return self:Pick("Seal of Light", "health management") end
         return false
     end
 
@@ -584,7 +592,7 @@ function M:HandleSeals(cfg)
         return false
     end
 
-    if not self:HasBuff(seal) then return self:Cast(seal) end       -- seal must be up before judging
+    if not self:HasBuff(seal) then return self:Pick(seal, "seal missing") end       -- seal must be up before judging
     
     if judgeIt and canJudge and self:IsReady("Judgement") then
         -- Seal twisting: hold the damage seal judge until just before the next
@@ -594,7 +602,7 @@ function M:HandleSeals(cfg)
             local tl = self:SwingTimeLeft()
             if tl and tl > 0.4 then return false end
         end
-        return self:Cast("Judgement")
+        return self:Pick("Judgement", "judge the seal")
     end
     return false
 end
@@ -650,10 +658,12 @@ end
 -- Light's 2.5s cast is longer than the 1.5s global cooldown, so GcdReady()
 -- alone reports "ready" up to a full second before the cast actually finishes.
 function M:CommitHeal(unit, amount, castTime)
-    self.healTarget = UnitName(unit)
-    self.healAmount = amount or 0
-    self.healUntil = GetTime() + (castTime or 0) + 1.0
-    self.castingUntil = GetTime() + (castTime or 0)
+    self:Later(function()
+        self.healTarget = UnitName(unit)
+        self.healAmount = amount or 0
+        self.healUntil = GetTime() + (castTime or 0) + 1.0
+        self.castingUntil = GetTime() + (castTime or 0)
+    end)
 end
 
 -- True while our own heal cast is still expected to be resolving, even after
@@ -803,6 +813,12 @@ end
 -- Cast a heal on a specific unit without changing the current target
 -- (SuperWoW's unit argument to CastSpellByName).
 function M:CastOn(spell, unit)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = "on " .. (UnitName(unit) or unit or "?")
+        return
+    end
     CastSpellByName(spell, unit)
 end
 
@@ -1060,11 +1076,11 @@ function M:HealSeals(cfg)
     if not (UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")) then return false end
     if not self:InMeleeRange() then return false end
     -- Seal of Wisdom must be up (both the self-mana and the judge need it).
-    if not self:HasBuff("Seal of Wisdom") then return self:Cast("Seal of Wisdom") end
+    if not self:HasBuff("Seal of Wisdom") then return self:Pick("Seal of Wisdom", "self mana") end
     -- Stamp Judgement of Wisdom on the mob once, if the group judge is enabled.
     if cfg.healManaJudge and self:KnowsSpell("Judgement") and self:IsReady("Judgement")
         and not self:DebuffEffectivelyUp("Seal of Wisdom") then
-        return self:Cast("Judgement")
+        return self:Pick("Judgement", "judge the seal")
     end
     return false
 end
@@ -1130,7 +1146,7 @@ function M:Rotate(cfg)
     if not cfg.healMode and not self:InMeleeRange() then
         local s = self:DesiredOpenerSeal(cfg)
         if s and self:KnowsSpell(s) and not self:HasBuff(s) then
-            if self:Cast(s) then return end
+            if self:Pick(s, "strike") then return end
         end
     end
 
@@ -1145,7 +1161,7 @@ function M:Rotate(cfg)
     -- instead of losing the GCD edge to the unconditional seal recast.
     -- (damage/tank mode only, same reasoning as the strike above)
     if not cfg.healMode and cfg.spells.holyShield and self:OwnCDReady("Holy Shield") then
-        if self:Cast("Holy Shield") then return end
+        if self:Pick("Holy Shield", "block charges") then return end
     end
     -- 2b. Consecration leads AoE: when toggled on (checkbox or /sbr aoe), cast it
     -- on cooldown right after the strike so it is a primary AoE source rather
@@ -1163,18 +1179,18 @@ function M:Rotate(cfg)
     if not cfg.healMode and cfg.spells.consecration
         and (not self.manaMgmtActive or cfg.consecInMana)
         and self:KnowsSpell("Consecration") and self:IsReady("Consecration") then
-        if self:Cast("Consecration") then return end
+        if self:Pick("Consecration", "AoE") then return end
     end
     -- 3. Seal upkeep and judgement (damage/tank mode only; heal mode runs its
     -- own Seal of Wisdom upkeep via HealSeals above)
     if not cfg.healMode and self:HandleSeals(cfg) then return end
     -- 4. Hammer of Wrath as execute (damage/tank mode only)
     if not cfg.healMode and cfg.spells.hammerOfWrath and self:TargetHPPct() <= 20 and self:IsReady("Hammer of Wrath") then
-        if self:Cast("Hammer of Wrath") then return end
+        if self:Pick("Hammer of Wrath", "execute") then return end
     end
     -- 5. Repentance (boss damage proc on Turtle) (damage/tank mode only)
     if not cfg.healMode and cfg.spells.repentance and self:IsReady("Repentance") then
-        if self:Cast("Repentance") then return end
+        if self:Pick("Repentance", "control") then return end
     end
     -- 6. Exorcism, a strong nuke but only against Undead and Demon targets.
     -- Skipped during mana recovery so it does not burn the mana we are saving.
@@ -1182,7 +1198,7 @@ function M:Rotate(cfg)
     if not cfg.healMode and cfg.spells.exorcism and not self.manaMgmtActive
         and self:KnowsSpell("Exorcism") and self:TargetIsUndeadOrDemon()
         and self:IsReady("Exorcism") then
-        if self:Cast("Exorcism") then return end
+        if self:Pick("Exorcism", "undead or demon") then return end
     end
 end
 

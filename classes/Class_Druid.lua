@@ -31,6 +31,8 @@
 
 local M = Aegis_SBR:NewClassModule("DRUID")
 M.uiTitle = "Druid"
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 M.uiHeight = 768
 -- Auto-attack is managed per form in this module instead of by the core, so a
 -- white swing is only started in Cat/Bear (where you melee) and never in
@@ -191,8 +193,13 @@ end
 
 -- CastSpellByName parses trailing parentheses as a rank spec, so a name
 -- like "Faerie Fire (Feral)" needs an explicit empty rank: "...(Feral)()".
-function M:CastSafe(name)
+function M:CastSafe(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason
+        return true
+    end
     if string.find(name, "%(") then
         CastSpellByName(name .. "()")
     else
@@ -247,8 +254,13 @@ end
 -- clips the cast in progress; the press during a cast queues the next
 -- spell, which is also what lands the Eclipse-buffed nuke the moment the
 -- proc window opens.
-function M:QueueCast(name)
+function M:QueueCast(name, reason)
     if not self:KnowsSpell(name) then return false end
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = name; p.reason = reason; p.queue = true
+        return true
+    end
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -661,7 +673,15 @@ function M:MaxAffordableRank(baseName, manas, mana)
     return nil
 end
 
-function M:CastOn(spell, unit)
+-- Targeted heal. Under a preview it is reported rather than cast; the unit is
+-- carried in the reason so the window says who would be healed.
+function M:CastOn(spell, unit, reason)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
+        return
+    end
     CastSpellByName(spell, unit)
 end
 
@@ -704,9 +724,12 @@ function M:RotateResto(cfg)
             and UnitExists("target") and UnitCanAttack("player", "target")
             and not UnitIsDeadOrGhost("target") then
             if self:KnowsSpell("Moonfire") and not self:HoTActive("target", "Moonfire", 10) then
-                self:NoteHoT("target", "Moonfire"); CastSpellByName("Moonfire"); return
+                if self:CastSafe("Moonfire", "downtime weave") then
+                    self:Later(function() self:NoteHoT("target", "Moonfire") end)
+                    return
+                end
             end
-            if self:KnowsSpell("Wrath") then CastSpellByName("Wrath"); return end
+            if self:CastSafe("Wrath", "downtime weave") then return end
         end
         return   -- nobody hurt past the threshold; nothing to weave
     end
@@ -722,13 +745,15 @@ function M:RotateResto(cfg)
     if self:HasBuff("Nature's Swiftness") then
         local maxr = self:MaxRank("Healing Touch")
         if maxr >= 1 then
-            self:CommitHeal(unit, htEff[maxr] or deficit, 0)
-            self:CastOn("Healing Touch(Rank " .. maxr .. ")", unit); return
+            local amtNS = htEff[maxr] or deficit
+            self:Later(function() self:CommitHeal(unit, amtNS, 0) end)
+            self:CastOn("Healing Touch(Rank " .. maxr .. ")", unit, "Nature's Swiftness is up")
+            return
         end
     end
     if cfg.useNSCombo ~= false and pct <= (cfg.nsHpPct or 40) / 100
         and self:KnowsSpell("Nature's Swiftness") and self:OwnCDReady("Nature's Swiftness") then
-        self:Cast("Nature's Swiftness"); return
+        if self:Pick("Nature's Swiftness", "emergency heal incoming") then return end
     end
 
     -- Swiftmend: instant top-up that consumes a Rejuv/Regrowth already on the unit.
@@ -748,23 +773,33 @@ function M:RotateResto(cfg)
     if cfg.useRegrowth ~= false and self:KnowsSpell("Regrowth")
         and pct <= (cfg.regrowthPct or 55) / 100 and not self:HoTActive(unit, "Regrowth", 18) then
         local rg, amt = self:PickRank("Regrowth", rgEff, self.RG_MANA, deficit, mana)
-        if rg then self:CommitHeal(unit, amt, 2.0); self:NoteHoT(unit, "Regrowth"); self:CastOn(rg, unit); return end
+        if rg then
+            self:Later(function() self:CommitHeal(unit, amt, 2.0); self:NoteHoT(unit, "Regrowth") end)
+            self:CastOn(rg, unit); return
+        end
     end
 
     -- Maintenance: keep Rejuvenation rolling (max affordable rank).
     if cfg.useRejuv ~= false and self:KnowsSpell("Rejuvenation") and not self:HoTActive(unit, "Rejuvenation", 11) then
         local rj = self:MaxAffordableRank("Rejuvenation", self.RJ_MANA, mana)
-        if rj then self:NoteHoT(unit, "Rejuvenation"); self:CastOn(rj, unit); return end
+        if rj then
+            self:Later(function() self:NoteHoT(unit, "Rejuvenation") end)
+            self:CastOn(rj, unit); return
+        end
     end
 
     -- Lifebloom: rolling stack (Turtle addition, if learned).
     if cfg.useLifebloom and self:KnowsSpell("Lifebloom") and not self:HoTActive(unit, "Lifebloom", 6) then
-        self:NoteHoT(unit, "Lifebloom"); self:CastOn("Lifebloom", unit); return
+        self:Later(function() self:NoteHoT(unit, "Lifebloom") end)
+        self:CastOn("Lifebloom", unit); return
     end
 
     -- Fill: downranked Healing Touch sized to the deficit.
     local ht, amt = self:PickRank("Healing Touch", htEff, self.HT_MANA, deficit, mana)
-    if ht then self:CommitHeal(unit, amt, 2.5); self:CastOn(ht, unit); return end
+    if ht then
+        self:Later(function() self:CommitHeal(unit, amt, 2.5) end)
+        self:CastOn(ht, unit); return
+    end
 end
 
 function M:Rotate(cfg)
