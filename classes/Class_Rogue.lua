@@ -23,6 +23,8 @@
 local M = Aegis_SBR:NewClassModule("ROGUE")
 M.uiTitle = "Rogue"
 M.uiHeight = 574
+-- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
+M.previewReady = true
 
 -- Chat output is shared in the core; this shim keeps call sites unchanged.
 local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
@@ -151,7 +153,7 @@ function M:NormalizeProfile(c)
     -- Existing profiles are moved off the old hardcoded 5 deliberately: that
     -- value only ever existed to cover an estimated timer we no longer use.
     if c.buffRenew == nil then c.buffRenew = BUFF_RENEW end
-    -- Cold Blood: opt-in. Rides along with Eviscerate only (see ColdBloodBefore).
+    -- Cold Blood: opt-in. Rides along with Eviscerate only (see ColdBloodReady).
     if c.useColdBlood == nil then c.useColdBlood = false end
     if c.popCDs == nil then c.popCDs = false end
     if c.autoCDElite == nil then c.autoCDElite = false end
@@ -244,20 +246,20 @@ end
 -- means "enough points for Eviscerate to be worth it", and it keeps the 3
 -- minute cooldown off the execute finisher, which fires with whatever is on
 -- hand (often 1-2 points) and would waste the crit.
-function M:ColdBloodBefore(cfg, cp)
-    if not cfg.useColdBlood then return end
-    if cp < (cfg.cpFinish or 4) then return end
-    if not self:KnowsSpell("Cold Blood") then return end
-    if not self:OwnCDReady("Cold Blood") then return end
-    -- The energy check is not a nicety here, it protects a three minute
-    -- cooldown. Cold Blood is free and off the GCD, so it always "succeeds";
-    -- the Eviscerate behind it does not, and an Eviscerate that fails for
-    -- want of energy leaves the buff sitting there to be eaten by the next
-    -- Sinister Strike for a fraction of the payoff. Only arm it when the
-    -- finisher it belongs to can actually be paid for.
-    if not Aegis_SBR:CanAfford("Eviscerate") then return end
-    CastSpellByName("Cold Blood")
+function M:ColdBloodReady(cfg, cp)
+    if not cfg.useColdBlood then return false end
+    if cp < (cfg.cpFinish or 4) then return false end
+    if not self:KnowsSpell("Cold Blood") then return false end
+    if not self:OwnCDReady("Cold Blood") then return false end
+    -- The energy check is not a nicety, it protects a three minute cooldown.
+    -- Cold Blood is free and off the GCD, so it always "succeeds"; the
+    -- Eviscerate behind it does not, and one that fails for want of energy
+    -- leaves the buff to be eaten by the next Sinister Strike for a fraction
+    -- of the payoff.
+    if not Aegis_SBR:CanAfford("Eviscerate") then return false end
+    return true
 end
+
 
 -- Spend the surplus before refreshing a buff.
 --
@@ -278,47 +280,87 @@ end
 -- Never dumps when that would leave the buff down for nothing: an unaffordable
 -- or unlearned Eviscerate, or evisExecuteOnly reserving it for the execute
 -- phase, all fall through to the plain refresh.
--- Returns true when the press has been used up (Eviscerate cast, or
--- deliberately held), false when the caller should refresh the buff normally.
-function M:DumpBeforeRefresh(cfg, cp, buffLeft)
-    if cp <= (cfg.refreshMaxCP or 5) then return false end
-    -- Structural reasons why the surplus could never reach Eviscerate. Refusing
-    -- to refresh here would deadlock: the points have nowhere else to go and the
-    -- buff would stay down forever. These fall through on purpose.
-    if cfg.evisExecuteOnly then return false end
-    if not self:KnowsSpell("Eviscerate") then return false end
-    -- Being short of energy is NOT such a reason - it passes on its own. This
-    -- used to fall through too, and that produced exactly the 5-point buff
-    -- refresh the ceiling exists to prevent: measured at 21 energy against a
-    -- cost of 30, which is nine energy, under a second of regeneration. So we
-    -- hold the press instead and let the energy arrive.
-    --
-    -- The valve is the buff itself: once it has actually DROPPED there is
-    -- nothing left to protect, and a buff that is down costs more than one
-    -- refreshed above the ceiling. Until then, waiting is cheaper than paying
-    -- five combo points for a duration this fight will not use.
-    if not Aegis_SBR:CanAfford("Eviscerate") then
-        if (buffLeft or 0) > 0 then return true end
-        return false
+-- Where surplus combo points may go instead of into a buff refresh.
+--
+-- Eviscerate normally, unless it is reserved for the execute phase. Rupture is
+-- the fallback, but ONLY from its own threshold: a recast overwrites Taste for
+-- Blood with whatever combo points it was cast at, so dumping two points into
+-- it would replace a 10% buff with a 4% one - the exact trap the separate
+-- ruptureCP slider exists to avoid.
+--
+-- nil means the surplus genuinely has nowhere to go.
+function M:DumpTarget(cfg, cp)
+    -- Rupture FIRST. Whenever its own threshold is reached and the buff is
+    -- actually due, the points belong there and not in an Eviscerate - the
+    -- Taste for Blood buff is what the combo points are being saved for.
+    -- RuptureDue is the same test P3 uses, so the two cannot drift apart: with
+    -- the talent it asks whether the buff is gone or inside its renew window,
+    -- without it whether the bleed is missing from the target.
+    if cfg.useRupture and self:KnowsSpell("Rupture")
+        and cp >= (cfg.ruptureCP or 3) and self:RuptureDue() then
+        return "Rupture"
     end
-    self:ColdBloodBefore(cfg, cp)
-    self:Cast("Eviscerate")
-    return true
+    -- Eviscerate takes the surplus only when Rupture cannot: below Rupture's
+    -- threshold, with the buff still healthy, or with Rupture switched off.
+    if not cfg.evisExecuteOnly and self:KnowsSpell("Eviscerate") then return "Eviscerate" end
+    return nil
 end
+
+
+-- What the surplus should do when a buff is due above the ceiling:
+--   nil      nothing special, refresh the buff as usual
+--   "hold"   spend the press on nothing and let the energy come back
+--   <spell>  cast this finisher instead; the refresh lands on the next press
+function M:DumpDecision(cfg, cp)
+    if cp <= (cfg.refreshMaxCP or 5) then return nil end
+    local spell = self:DumpTarget(cfg, cp)
+    -- No target at all: Eviscerate reserved for execute (or not yet learned)
+    -- AND Rupture off or below its threshold. Refusing the refresh here would
+    -- deadlock - the points cannot be spent, the buff can never come back, and
+    -- the rotation would build into a full combo bar forever. This is the one
+    -- case where a refresh above the ceiling is still the least bad outcome.
+    if not spell then return nil end
+    -- Short of energy is NEVER a reason to overspend the points. Energy passes
+    -- on its own; combo points spent on duration this fight will not use do
+    -- not come back.
+    if not Aegis_SBR:CanAfford(spell) then return "hold" end
+    return spell
+end
+
 
 -- ============================================================
 -- Rotation. The core has already secured a target and ensured auto attack.
--- Cooldowns are off the global cooldown, so they may be cast in the same
--- press as one GCD ability. Everything else uses early returns so exactly
--- one GCD ability is chosen per press.
+--
+-- Split into Decide and Rotate (see Aegis_SBR:Perform). Decide works out what
+-- the press should do and returns a plan WITHOUT casting anything, so the
+-- upcoming-spell window can ask the same question four times a second without
+-- a single ability going out. Rotate is then only "decide, then do it".
+--
+-- Because of that split, nothing in Decide may have side effects. The trace is
+-- the one exception and it is gated on the `tracing` argument, which only the
+-- real press passes - otherwise the preview would flood the log.
+--
+-- Cooldowns are off the global cooldown, so they ride along as `extras` in the
+-- same press as one GCD ability. Everything else returns early so exactly one
+-- GCD ability is chosen.
 -- ============================================================
-function M:Rotate(cfg)
+local function plan(spell, reason, extras)
+    return { spell = spell, reason = reason, extras = extras }
+end
+
+-- Cold Blood belongs to the Eviscerate it is meant to turn into a crit, so it
+-- is attached to that plan rather than being a decision of its own.
+function M:FinisherPlan(cfg, cp, spell, reason, extras)
+    if spell == "Eviscerate" and self:ColdBloodReady(cfg, cp) then
+        extras = extras or {}
+        table.insert(extras, "Cold Blood")
+    end
+    return plan(spell, reason, extras)
+end
+
+function M:Decide(cfg, tracing)
     local cls = UnitClassification("target")
     local isElite = (cls == "worldboss" or cls == "elite" or cls == "rareelite")
-    if cfg.popCDs or (cfg.autoCDElite and isElite) then
-        self:Cast("Adrenaline Rush")
-        self:Cast("Blade Flurry")
-    end
 
     local builder = cfg.builder
     if builder == "" then
@@ -332,42 +374,40 @@ function M:Rotate(cfg)
     local cp = GetComboPoints("player", "target")
     local now = GetTime()
 
+    -- Off-GCD cooldowns ride along with whatever else the press does. Gated on
+    -- their own cooldown as well as on being known: the cast would fail anyway
+    -- while they are down, but the preview would otherwise list them forever.
+    local extras
+    if cfg.popCDs or (cfg.autoCDElite and isElite) then
+        extras = {}
+        if self:KnowsSpell("Adrenaline Rush") and self:OwnCDReady("Adrenaline Rush") then
+            table.insert(extras, "Adrenaline Rush")
+        end
+        if self:KnowsSpell("Blade Flurry") and self:OwnCDReady("Blade Flurry") then
+            table.insert(extras, "Blade Flurry")
+        end
+        if table.getn(extras) == 0 then extras = nil end
+    end
+
     -- Execute: once the target is nearly dead, finish with whatever combo
     -- points are on hand rather than risk them going to waste on the kill.
-    -- Requires at least 1 combo point (Ruthlessness, 100% at 3/3, guarantees
-    -- one is on hand after any finisher, so this is rarely blocked once a
-    -- fight is underway).
     --
     -- The health percentage is the ONLY thing that starts the execute phase.
     -- Time to kill was briefly allowed to start it too and that was wrong: a
     -- normal mob's whole life is shorter than any sensible window, so "dies
     -- within 4 seconds" is true from the first measurement onward and the
     -- rotation dumped 1-point Eviscerates from full health. Time can only ever
-    -- take the execute phase AWAY, never grant it.
-    -- executeMinCP is the floor for the dump. At 1 (the default, and what the
-    -- rotation always did) a single point is enough. Measured from a real log:
-    -- 69 of 108 execute presses went out at 1 combo point, which costs a full
-    -- Eviscerate's energy for a fraction of a builder's damage - so the floor
-    -- exists to be raised, but raising it is the player's call.
+    -- take the execute phase AWAY, never grant it - and only below cpFinish,
+    -- so a full-value finisher is never held back. Unknown TTK never suppresses.
     local execute = cfg.useExecute and cp >= (cfg.executeMinCP or 1)
         and self:TargetHPPct() <= (cfg.executeHpPct or 10)
-
-    -- ...and it only takes away the CHEAP dump. Below cpFinish, execute is
-    -- spending points early on the argument that the target is about to die -
-    -- an argument a measured fifteen seconds of remaining life refutes, which
-    -- is the "finishes too early" report: an elite parked at 8% collecting
-    -- 1-point Eviscerates. At or above cpFinish the finisher is worth its
-    -- points regardless of how long the target lives, so it is never held
-    -- back - and that keeps "Eviscerate only in execute" working on a boss,
-    -- which a blanket suppression would have switched off completely.
-    -- Unknown TTK never suppresses.
     local ttk = Aegis_SBR:TargetTTK()
     local ttkWin = cfg.executeTTK or 0
     if execute and cp < cpEvis and ttkWin > 0 and ttk and ttk > ttkWin then
         execute = false
     end
 
-    if self:Tracing() then
+    if tracing and self:Tracing() then
         self:Trace("cp=" .. cp
             .. " build=" .. builder
             .. " snd=" .. (useSnd and string.format("%.1fs", self:BuffTime("Slice and Dice")) or "-")
@@ -383,11 +423,12 @@ function M:Rotate(cfg)
             .. " ttk=" .. (ttk and string.format("%.1fs", ttk) or "?")
             .. " exec=" .. (cfg.useExecute and (execute and "Y" or "N") or "-")
             .. " cap=" .. (cfg.refreshMaxCP or 5) .. "/" .. (cfg.executeMinCP or 1)
+            .. " dump=" .. (self:DumpTarget(cfg, cp) or "-")
             .. " cb=" .. (cfg.useColdBlood and (self:KnowsSpell("Cold Blood")
                 and (self:OwnCDReady("Cold Blood") and "rdy" or "cd") or "?") or "-")
             .. " elite=" .. (isElite and "Y" or "N"),
             -- Rogue never downranks (all ranks cost the same energy), so every
-            -- Cast() below is a bare CastSpellByName(name) - vanilla resolves
+            -- cast below is a bare CastSpellByName(name) - vanilla resolves
             -- that to the highest known rank on its own. This line just
             -- surfaces the max rank on record for what would actually go out,
             -- so a bad rank pick would show up here instead of staying invisible.
@@ -402,8 +443,7 @@ function M:Rotate(cfg)
 
     -- P1 Riposte, combo point independent, only inside the parry window
     if cfg.useRiposte and self:KnowsSpell("Riposte") and now < (self.riposteExpiry or 0) then
-        CastSpellByName("Riposte")
-        return
+        return plan("Riposte", "parry window open", extras)
     end
 
     -- P1b Surprise Attack, combo point independent, only inside the target's
@@ -411,86 +451,82 @@ function M:Rotate(cfg)
     -- normal builder/finisher queue rather than waiting its turn - missing the
     -- window wastes the proc entirely.
     if cfg.useSurpriseAttack and self:KnowsSpell("Surprise Attack") and now < (self.surpriseExpiry or 0) then
-        CastSpellByName("Surprise Attack")
-        return
+        return plan("Surprise Attack", "dodge window open", extras)
     end
 
     -- P2 no combo points, build (prevents an empty finisher)
     if cp == 0 then
-        self:Cast(builder)
-        return
+        return plan(builder, "no combo points", extras)
     end
 
-    -- How much life is left on each maintained buff - all three read straight
-    -- off the real buff timer now (see the header comment above).
+    -- How much life is left on each maintained buff - read straight off the
+    -- real buff timer. 0 is a meaningful renew setting ("wait until it has
+    -- actually dropped") and 0 is truthy in Lua, so the `or` fallback only
+    -- fires for a genuinely unset field. The test is <= rather than < so that
+    -- a lapsed buff, which reads as 0 seconds left, still counts as due.
     local sndLeft = useSnd and self:BuffTime("Slice and Dice") or 0
     local envLeft = useEnv and self:BuffTime("Envenom") or 0
-    -- 0 is a meaningful setting here ("wait until it has actually dropped"), and
-    -- 0 is truthy in Lua, so the `or` fallback only fires for a genuinely unset
-    -- field. The test is <= rather than < so that a lapsed buff, which reads as
-    -- 0 seconds remaining, still counts as due when the window is set to 0.
     local renew = cfg.buffRenew or BUFF_RENEW
     local sndDue = useSnd and sndLeft <= renew
     local envDue = useEnv and envLeft <= renew
     local rupDue = useRup and self:RuptureDue()
     local rupCP = cfg.ruptureCP or 3
 
-    -- ------------------------------------------------------------
     -- Execute first: on a dying target a fresh buff or bleed is wasted, so the
     -- points go straight into damage.
-    -- ------------------------------------------------------------
     if execute then
-        self:ColdBloodBefore(cfg, cp)
-        self:Cast("Eviscerate")
-        return
+        return self:FinisherPlan(cfg, cp, "Eviscerate",
+            "execute, target at " .. string.format("%.0f%%", self:TargetHPPct()), extras)
     end
 
-    -- ------------------------------------------------------------
-    -- P3 Rupture, at its OWN (lower) combo-point threshold. It goes first
-    -- among the buffs because it is the only one whose strength scales with the
-    -- points spent (2% melee damage per point via Taste for Blood), and the
-    -- moment another buff comes due is exactly our combo-point peak - so that
-    -- peak is worth spending here. Ruthlessness hands a point straight back,
-    -- which lands the cheap refreshes below on the very next press.
-    -- ------------------------------------------------------------
+    -- P3 Rupture, at its OWN combo-point threshold. It goes first among the
+    -- buffs because it is the only one whose strength scales with the points
+    -- spent (2% melee damage per point via Taste for Blood), and the moment
+    -- another buff comes due is exactly the combo-point peak. Ruthlessness
+    -- hands a point straight back, which lands the cheap refreshes below on
+    -- the very next press.
     if rupDue and cp >= rupCP then
-        self:Cast("Rupture")   -- uptime is read back off the buff itself, nothing to stamp
-        return
+        return plan("Rupture", "Taste for Blood due, " .. cp .. " CP", extras)
     end
 
-    -- ------------------------------------------------------------
-    -- P4/P5 Fixed-strength buffs. Their potency does not scale with combo
-    -- points (only their duration does), so they are simply refreshed with
-    -- whatever is on hand the moment they run low - no dumping a finisher
-    -- first just to get back down to 1 point, which only burned energy and a
-    -- global cooldown for nothing.
-    -- ------------------------------------------------------------
+    -- P4/P5 the two fixed-strength buffs. Only their DURATION scales with combo
+    -- points, so above the ceiling the surplus goes into a finisher first and
+    -- the refresh lands on the next press with the point Ruthlessness returns.
     if sndDue then
-        if self:DumpBeforeRefresh(cfg, cp, sndLeft) then return end
-        self:Cast("Slice and Dice")   -- uptime is read back off the buff itself, nothing to stamp
-        return
+        local d = self:DumpDecision(cfg, cp)
+        if d == "hold" then
+            return plan(nil, "pooling energy, " .. cp .. " CP to spend", extras)
+        end
+        if d then
+            return self:FinisherPlan(cfg, cp, d, "spending " .. cp .. " CP before the refresh", extras)
+        end
+        return plan("Slice and Dice", string.format("%.1fs left", sndLeft), extras)
     end
     if envDue then
-        if self:DumpBeforeRefresh(cfg, cp, envLeft) then return end
-        self:Cast("Envenom")   -- uptime is read back off the buff itself, nothing to stamp
-        return
+        local d = self:DumpDecision(cfg, cp)
+        if d == "hold" then
+            return plan(nil, "pooling energy, " .. cp .. " CP to spend", extras)
+        end
+        if d then
+            return self:FinisherPlan(cfg, cp, d, "spending " .. cp .. " CP before the refresh", extras)
+        end
+        return plan("Envenom", string.format("%.1fs left", envLeft), extras)
     end
 
-    -- ------------------------------------------------------------
     -- P6 Eviscerate as the surplus finisher: only once every maintained buff is
     -- healthy. Suppressed while Rupture is waiting for its threshold, so it can
     -- never steal the points Rupture is saving up for. Can be reserved for the
-    -- execute phase entirely (evisExecuteOnly), which puts every other point
-    -- into the buffs instead.
-    -- ------------------------------------------------------------
+    -- execute phase entirely (evisExecuteOnly).
     if not cfg.evisExecuteOnly and not rupDue and cp >= cpEvis then
-        self:ColdBloodBefore(cfg, cp)
-        self:Cast("Eviscerate")
-        return
+        return self:FinisherPlan(cfg, cp, "Eviscerate", cp .. " CP, buffs healthy", extras)
     end
 
     -- P7 otherwise build
-    self:Cast(builder)
+    return plan(builder, "building to " .. cpEvis .. " CP", extras)
+end
+
+function M:Rotate(cfg)
+    Aegis_SBR:Perform(self, self:Decide(cfg, true))
 end
 
 -- ============================================================
