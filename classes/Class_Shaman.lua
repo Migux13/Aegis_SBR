@@ -35,7 +35,7 @@ local M = Aegis_SBR:NewClassModule("SHAMAN")
 M.uiTitle = "Shaman"
 -- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
 M.previewReady = true
-M.uiHeight = 642
+M.uiHeight = 698
 M.meleeAutoAttack = false   -- melee swing is managed per-mode in the module
 
 -- Talent that grants the Clearcasting proc. It grants no spell, so KnowsSpell
@@ -98,6 +98,32 @@ local TOTEM_APPLY_GRACE = 3
 local TOTEM_RETRY = 1.5
 -- Confirmed casts that produced no aura before the name is written off.
 local TOTEM_MISS_MAX = 2
+
+-- How long Fire Nova Totem occupies the fire slot before it detonates. There is
+-- no API for the life of your own totem, so this is calibrated from play rather
+-- than read: at the original guess of 5s a tester reported Magma arriving
+-- "2-3 sec" after the nova went off, which is that guess overshooting.
+--
+-- Wrong in either direction costs something, and they are not symmetric: too
+-- LOW replaces a nova that has not detonated yet and throws its damage away,
+-- too HIGH just leaves the slot empty for a moment. So this errs slightly
+-- toward late.
+local NOVA_STAND = 2.5
+
+-- Set by MaintainAllTotems from the profile, read by MaintainTotem.
+local cfgTotemRange = false
+
+-- Fallback radius in yards, used only when the tooltip cannot be read. Real
+-- radii come from Aegis_SBR:SpellRadius per totem.
+local TOTEM_RANGE = 20
+-- Tolerance on the radius, so a totem sitting exactly on the boundary does not
+-- flicker between "in" and "out" with every step. Call of Elements uses the
+-- same 7%.
+local TOTEM_RANGE_SLACK = 1.07
+-- The four element slots, in one place so range checks and the recall can walk
+-- them without repeating the list.
+local TOTEM_SLOTS = { "water", "earth", "fire", "air" }
+local RECALL_SPELL = "Totemic Recall"
 
 local TOTEM_REDROP_DEFAULT = 110
 local TOTEM_REDROP = {
@@ -225,6 +251,11 @@ function M:NormalizeProfile(c)
     -- AoE fire pair (Fire Nova on cooldown + Magma between). Off by default:
     -- it takes over the fire slot from the single-totem picker.
     if c.aoeFireTotems == nil then c.aoeFireTotems = false end
+    -- Both off by default: they depend on SuperWoW position data that has not
+    -- been verified in play yet, and a wrong distance would re-drop totems (and
+    -- burn mana) for no reason.
+    if c.totemRange == nil then c.totemRange = false end
+    if c.totemRecall == nil then c.totemRecall = false end
     if c.totemWater == nil then c.totemWater = "manaspring" end
     if c.totemEarth == nil then c.totemEarth = "none" end
     if c.totemFire == nil then c.totemFire = "none" end
@@ -441,6 +472,11 @@ function M:RunsWithoutTarget(cfg)
     if cfg.mode == "restoration" then return true end   -- a healer runs with no enemy targeted
     -- Pre-pull imbue upkeep is a self-buff and must run with no target selected.
     if self:ImbueState(cfg) then return true end
+    -- Totemic Recall matters precisely when there is no enemy left: you have
+    -- walked away and the totems are standing where the fight was. Gating it
+    -- behind a target meant it only ever fired mid-combat, which is the one
+    -- moment you do not want it.
+    if self:RecallDue(cfg) then return true end
     return false
 end
 
@@ -609,6 +645,15 @@ M.totemT = {}
 -- totem was really placed - Queue() cannot tell us, it reports success as soon
 -- as the spell is merely known.
 M.totemCastT = {}
+-- The totem's UNIT, per element slot. SuperWoW makes a placed totem an
+-- addressable unit, which is the only way to measure the real distance to it -
+-- and that in turn is the only signal available for the totems that grant no
+-- aura at all (Searing, Magma, Fire Nova, Grounding). Learned from
+-- UNIT_MODEL_CHANGED at the bottom of this file; the technique is Call of
+-- Elements'.
+M.totemGuid = {}
+-- Which totem is standing in each slot, so its own radius can be looked up.
+M.totemSpell = {}
 -- Last ATTEMPT per element slot, successful or not. Purely a throttle: without
 -- it a totem that cannot be cast (no mana) would claim every single press and
 -- starve the rest of the rotation, because Queue always says yes.
@@ -650,6 +695,100 @@ function M:OnCastEvent(caster, target, spellName)
     end
 end
 
+-- Distance from the player to the totem standing in this slot, in yards, or
+-- nil when it cannot be measured (no SuperWoW, totem never seen, totem gone).
+-- nil always means "cannot judge" and must never be read as "out of range".
+function M:TotemDistance(slot)
+    if not UnitPosition then return nil end
+    local guid = self.totemGuid[slot]
+    if not guid or not UnitExists(guid) then return nil end
+    local x1, y1, z1 = UnitPosition("player")
+    local x2, y2, z2 = UnitPosition(guid)
+    if not (x1 and x2) then return nil end
+    local dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- How far this totem actually reaches. A Magma covers a fraction of what an
+-- aura totem does, so a single number for all four would be wrong for half of
+-- them - and wrong in the expensive direction, calling a totem useful while it
+-- hits nothing.
+function M:TotemRadius(slot)
+    local spell = self.totemSpell[slot]
+    local r = spell and Aegis_SBR:SpellRadius(spell)
+    if not r or r <= 0 then r = TOTEM_RANGE end
+    return r * TOTEM_RANGE_SLACK
+end
+
+function M:TotemOutOfRange(slot)
+    local d = self:TotemDistance(slot)
+    if not d then return false end
+    return d >= self:TotemRadius(slot)
+end
+
+-- Is anyone else in the group still standing in this totem's radius? A shaman
+-- who has walked off is not reason enough to pull a totem the party is still
+-- using - Mana Spring and Healing Stream serve the group, not the caster.
+function M:GroupNearTotem(guid, radius)
+    if not UnitPosition then return false end
+    local x2, y2, z2 = UnitPosition(guid)
+    if not x2 then return false end
+    local prefix, count = "raid", GetNumRaidMembers()
+    if count == 0 then prefix, count = "party", GetNumPartyMembers() end
+    for i = 1, count do
+        local u = prefix .. i
+        if UnitExists(u) and not UnitIsUnit(u, "player") and not UnitIsDeadOrGhost(u) then
+            local x1, y1, z1 = UnitPosition(u)
+            if x1 then
+                local dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
+                if math.sqrt(dx * dx + dy * dy + dz * dz) < (radius or TOTEM_RANGE) then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- Totemic Recall: pull every totem back and get a quarter of their mana back.
+--
+-- Only when EVERY standing totem is out of reach, because the spell recalls all
+-- of them at once - with three good totems and one stranded, recalling would
+-- throw the three away for a sliver of mana. And only when no group member is
+-- still inside one of them.
+--
+-- The gain is smaller than the 25% suggests: the totems are re-placed at full
+-- cost afterwards, so it saves a quarter of one placement. What makes it worth
+-- having is the side effect - the slots read as empty immediately and get
+-- re-dropped where the shaman actually is, instead of waiting out the timer.
+-- Split from the cast so the core can be told "this module has something to do
+-- even with no target selected" without a preview or a check firing the spell.
+function M:RecallDue(cfg)
+    if not cfg.totemRecall then return false end
+    if not UnitPosition then return false end
+    if not self:KnowsSpell(RECALL_SPELL) then return false end
+    if not self:OwnCDReady(RECALL_SPELL) then return false end
+
+    local standing, stranded = 0, 0
+    for i = 1, table.getn(TOTEM_SLOTS) do
+        local slot = TOTEM_SLOTS[i]
+        local guid = self.totemGuid[slot]
+        if guid and UnitExists(guid) then
+            standing = standing + 1
+            if self:TotemOutOfRange(slot) and not self:GroupNearTotem(guid, self:TotemRadius(slot)) then
+                stranded = stranded + 1
+            end
+        end
+    end
+    return standing > 0 and stranded == standing
+end
+
+function M:RecallTotems(cfg)
+    if not self:RecallDue(cfg) then return false end
+    -- Treated as an off-GCD extra like the totems themselves. If it turns out
+    -- to cost a global cooldown after all, this spends one - rarely, and only
+    -- while walking away from a fight.
+    return self:PickExtra(RECALL_SPELL)
+end
+
 -- The aura a totem grants, as the CLIENT names it - returned as two candidates
 -- because our table is a guess and the two forms differ per totem for no
 -- discernible reason (Windfury Totem keeps the word, Stoneskin drops it).
@@ -684,9 +823,21 @@ function M:TryTotem(key, spell, now)
     -- from the spellbook tooltip, and an unreadable cost counts as affordable,
     -- so this can never be the reason a totem stays down.
     if Aegis_SBR.CanAfford and not Aegis_SBR:CanAfford(spell) then return false end
-    if not self:Queue(spell, "totem upkeep") then return false end
+    -- PickExtra, not Queue: with Nampower a totem costs no global cooldown, so
+    -- it rides along in the same press as whatever the rotation is doing rather
+    -- than spending a press of its own.
+    if not self:PickExtra(spell) then return false end
     self:Later(function() self.totemTryT[key] = now end)
-    if not SpellInfo then self:Later(function() self.totemT[key] = now end) end
+    if not SpellInfo then
+        -- No cast event on this client, so the attempt has to stand in for both
+        -- clocks. The per-spell one matters for the AoE fire pair, which judges
+        -- Magma by when Magma itself was last placed - without this it would
+        -- read "never placed" forever and re-drop on every retry.
+        self:Later(function()
+            self.totemT[key] = now
+            self.totemCastT[spell] = now
+        end)
+    end
     return true
 end
 
@@ -701,6 +852,14 @@ end
 function M:MaintainTotem(key, spell, interval)
     if spell == "" or not self:KnowsSpell(spell) then return false end
     local now = GetTime()
+
+    -- Walked out of its radius: the totem is standing but doing nothing for us,
+    -- so it counts as missing regardless of aura or clock. This is the only
+    -- check that covers the totems granting no aura at all, which are exactly
+    -- the ones the blind timer serves worst.
+    if cfgTotemRange and self:TotemOutOfRange(key) then
+        return self:TryTotem(key, spell, now)
+    end
     local mapped, own = self:TotemBuffNames(spell)
 
     if mapped then
@@ -765,7 +924,7 @@ function M:MaintainFireTotems(cfg)
     if not haveNova and not haveMagma then return false end
 
     if haveNova and self:OwnCDReady(nova) then
-        if self:Queue(nova, "AoE, on cooldown") then
+        if self:PickExtra(nova) then
             -- Same rule as TryTotem: with the cast event the stamp comes from
             -- the cast that actually happened, not from the attempt.
             self:Later(function()
@@ -774,31 +933,81 @@ function M:MaintainFireTotems(cfg)
             end)
             -- Nova occupies the slot only briefly; letting Magma follow as soon
             -- as it has detonated is the point of the pairing.
-            self:Later(function() self.novaUntil = GetTime() + 5 end)
+            self:Later(function() self.novaUntil = GetTime() + NOVA_STAND end)
             return true
         end
     end
-    -- Hold Magma back while a Nova is still standing - re-dropping would
-    -- replace it and waste the detonation it was cast for.
+    -- Magma fills the gap, but it may NOT be judged by the element slot's clock
+    -- the way a normal totem is. That clock is stamped by any fire totem, Fire
+    -- Nova included, so with Nova's ~15s cooldown against Magma's 18s interval
+    -- the window never opened once - reported from play as "Magma Totem does
+    -- not get placed at all".
+    --
+    -- The right clock is Magma's OWN last cast, plus one extra rule: a Nova
+    -- since then has replaced it, so it is due again the moment that Nova has
+    -- detonated. Both timestamps are already kept per spell by OnCastEvent.
     if haveMagma and GetTime() >= (self.novaUntil or 0) then
-        if self:MaintainTotem("fire", magma) then return true end
+        local now = GetTime()
+        local lastMagma = self.totemCastT[magma] or 0
+        local lastNova  = self.totemCastT[nova] or 0
+        local due = (lastMagma == 0)                                    -- never placed
+            or (lastNova > lastMagma)                                   -- a Nova replaced it
+            or ((now - lastMagma) >= (TOTEM_REDROP[magma] or TOTEM_REDROP_DEFAULT))
+        if due and self:TryTotem("fire", magma, now) then return true end
     end
     return false
 end
 
+-- Totem upkeep, as off-GCD EXTRAS.
+--
+-- With Nampower a totem is instant and costs no global cooldown, so upkeep does
+-- not compete with the rotation at all - which is why these used to sit near
+-- the bottom of every priority list and why that position no longer matters.
+-- The callers therefore do NOT return on a hit.
+--
+-- All four go out in a single press when Nampower is present; see the queue
+-- test inside for why that condition and not a blanket one-per-press rule.
 function M:MaintainAllTotems(cfg)
     if cfg.useTotems == false then return false end
-    if self:MaintainTotem("water", self.WATER_TOTEMS[cfg.totemWater or "none"] or "") then return true end
-    if self:MaintainTotem("earth", self.EARTH_TOTEMS[cfg.totemEarth or "none"] or "") then return true end
+    -- MaintainTotem is called from several places without cfg, so the toggle is
+    -- handed over here rather than threaded through every signature.
+    cfgTotemRange = cfg.totemRange and true or false
+    if self:RecallTotems(cfg) then return true end
+
+    -- All four in one press when the client can take it, one otherwise. The
+    -- condition is the presence of the Nampower queue API, which is the same
+    -- test Call of Elements uses for the same reason: without it a second
+    -- CastSpellByName in the same frame overrides the first instead of being
+    -- queued behind it, so only one totem would actually land.
+    --
+    -- Nampower is a hard requirement for this addon, so the single-cast path is
+    -- a safety net rather than a supported mode.
+    local oneOnly = (QueueSpellByName == nil)
+    local did = false
+
+    if self:MaintainTotem("water", self.WATER_TOTEMS[cfg.totemWater or "none"] or "") then
+        did = true
+        if oneOnly then return true end
+    end
+    if self:MaintainTotem("earth", self.EARTH_TOTEMS[cfg.totemEarth or "none"] or "") then
+        did = true
+        if oneOnly then return true end
+    end
     -- The AoE pair owns the fire slot when enabled, so the single-totem picker
     -- is skipped rather than fighting it for the same slot.
     if cfg.aoeFireTotems then
-        if self:MaintainFireTotems(cfg) then return true end
+        if self:MaintainFireTotems(cfg) then
+            did = true
+            if oneOnly then return true end
+        end
     elseif self:MaintainTotem("fire", self.FIRE_TOTEMS[cfg.totemFire or "none"] or "") then
-        return true
+        did = true
+        if oneOnly then return true end
     end
-    if self:MaintainTotem("air",   self.AIR_TOTEMS[cfg.totemAir or "none"] or "") then return true end
-    return false
+    if self:MaintainTotem("air", self.AIR_TOTEMS[cfg.totemAir or "none"] or "") then
+        did = true
+    end
+    return did
 end
 
 -- Heal decision. Casts one spell per press via early return.
@@ -806,6 +1015,11 @@ end
 -- (single-target emergency, wins over AoE) -> Chain Heal (AoE) -> downranked
 -- Healing Wave (fill) -> Water Shield upkeep -> totem upkeep (during downtime).
 function M:RotateRestoration(cfg)
+    -- Above the GCD guard on purpose: totems cost no global cooldown, so a
+    -- resto shaman can keep them up straight through a heal cast. Everything
+    -- below this line is a real cast and has to wait for the GCD.
+    self:MaintainAllTotems(cfg)
+
     if not self:GcdReady() then return end
 
     local ratio = (cfg.healThreshold or 90) / 100
@@ -862,12 +1076,6 @@ function M:RotateRestoration(cfg)
 
     -- Nothing urgent: keep the shield and totems up during the lull.
     if self:MaintainShield(cfg) then return end
-    if cfg.useTotems ~= false then
-        -- Shared helper rather than four copies of the same calls: Restoration
-        -- had its own duplicate set, so anything added centrally (the AoE fire
-        -- pair, the per-totem intervals) silently skipped this spec.
-        if self:MaintainAllTotems(cfg) then return end
-    end
     -- Weapon imbue upkeep: below every heal and totem, above the optional
     -- damage weave. Restoration reaches this only when nothing needs healing,
     -- so an imbue can never take the global cooldown away from a heal - but a
@@ -900,6 +1108,9 @@ function M:Rotate(cfg)
     -- rotations below never run without an enemy.
     local hasEnemy = UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")
     if not hasEnemy then
+        -- Off the global cooldown and unrelated to any target, so it belongs
+        -- here as much as in combat.
+        self:RecallTotems(cfg)
         self:MaintainImbue(cfg)
         return
     end
@@ -939,6 +1150,13 @@ function M:RotateEnhancement(cfg)
             .. " mana=" .. string.format("%.0f", self:ManaPct()))
     end
 
+    -- Totem upkeep runs FIRST, because it is off the global cooldown: it rides
+    -- along with whatever this press does rather than competing with it. It has
+    -- to sit above the early returns below - down at the bottom it would only
+    -- ever be reached on a press where nothing else fired, which is the very
+    -- problem being fixed.
+    self:MaintainAllTotems(cfg)
+
     -- P1 shield upkeep
     if self:MaintainShield(cfg) then return end
 
@@ -976,9 +1194,6 @@ function M:RotateEnhancement(cfg)
         end
     end
 
-    -- P7 Totem upkeep (all four elements, timer/cast-event gated, low priority)
-    if self:MaintainAllTotems(cfg) then return end
-
     -- P8 Lightning Bolt filler / weave. Also the level 1 damage source.
     if cfg.lbFiller and self:KnowsSpell("Lightning Bolt") then
         self:Queue("Lightning Bolt", "filler")
@@ -997,6 +1212,13 @@ function M:RotateElemental(cfg)
             .. " EM=" .. (cfg.useElementalMastery and (self:KnowsSpell("Elemental Mastery") and "Y" or "n") or "-")
             .. " mana=" .. string.format("%.0f", self:ManaPct()))
     end
+
+    -- Totem upkeep runs FIRST, because it is off the global cooldown: it rides
+    -- along with whatever this press does rather than competing with it. It has
+    -- to sit above the early returns below - down at the bottom it would only
+    -- ever be reached on a press where nothing else fired, which is the very
+    -- problem being fixed.
+    self:MaintainAllTotems(cfg)
 
     -- P1 shield upkeep (Water Shield for mana by default)
     if self:MaintainShield(cfg) then return end
@@ -1025,9 +1247,6 @@ function M:RotateElemental(cfg)
         end
     end
 
-    -- P5 Totem upkeep (all four elements)
-    if self:MaintainAllTotems(cfg) then return end
-
     -- P6 Lightning Bolt filler, the main nuke (builds Electrify). Always the
     -- level 1 fallback.
     if self:KnowsSpell("Lightning Bolt") then
@@ -1049,6 +1268,13 @@ function M:RotateTank(cfg)
             .. " ls=" .. (cfg.useLightningStrike and (self:KnowsSpell("Lightning Strike") and "Y" or "n") or "-")
             .. " taunt=" .. (cfg.useTaunt and (self:KnowsSpell("Earthshaker Slam") and "Y" or "n") or "-"))
     end
+
+    -- Totem upkeep runs FIRST, because it is off the global cooldown: it rides
+    -- along with whatever this press does rather than competing with it. It has
+    -- to sit above the early returns below - down at the bottom it would only
+    -- ever be reached on a press where nothing else fired, which is the very
+    -- problem being fixed.
+    self:MaintainAllTotems(cfg)
 
     -- P1 shield upkeep (Lightning Shield for threat)
     if self:MaintainShield(cfg) then return end
@@ -1094,9 +1320,6 @@ function M:RotateTank(cfg)
         and self:InSpellRange("Lightning Strike") then
         if self:Queue("Lightning Strike", "on cooldown") then return end
     end
-
-    -- P7 Totem upkeep (all four elements)
-    if self:MaintainAllTotems(cfg) then return end
 
     -- P8 optional Lightning Bolt filler (off by default for tanks)
     if cfg.lbFiller and self:KnowsSpell("Lightning Bolt") then
@@ -1164,4 +1387,29 @@ talentFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 talentFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")
 talentFrame:SetScript("OnEvent", function()
     M.talentCache = nil
+end)
+
+-- ============================================================
+-- Totem units. SuperWoW reports a freshly placed totem through
+-- UNIT_MODEL_CHANGED with a GUID in arg1; "<guid>owner" resolves to whoever
+-- summoned it, which is what separates our own totems from every other one in
+-- the raid. The unit name carries the totem's spell name, so it maps straight
+-- onto the element slot. Borrowed from Call of Elements, which uses the same
+-- two facts to measure distance to a totem.
+--
+-- Registered only when UnitPosition exists: without SuperWoW the GUID would be
+-- useless anyway, and every distance check degrades to "cannot judge".
+-- ============================================================
+local totemWatch = CreateFrame("Frame")
+if UnitPosition then totemWatch:RegisterEvent("UNIT_MODEL_CHANGED") end
+totemWatch:SetScript("OnEvent", function()
+    if not arg1 then return end
+    if not UnitIsUnit(arg1 .. "owner", "player") then return end
+    local _, _, name = string.find(UnitName(arg1) or "", "^(.- Totem)")
+    if not name then return end
+    local slot = M:TotemElementMap()[name]
+    if slot then
+        M.totemGuid[slot] = arg1
+        M.totemSpell[slot] = name
+    end
 end)

@@ -69,6 +69,7 @@ function Aegis_SBR:InvalidateSpellIndex()
     Aegis_SBR.spellIndex = nil
     Aegis_SBR.spellRanks = nil
     Aegis_SBR.costCache  = nil   -- slots moved, and a talent may have changed a cost
+    Aegis_SBR.radiusCache = nil
 end
 
 function Aegis_SBR:FindSpellSlot(name)
@@ -143,6 +144,45 @@ function Aegis_SBR:SpellCost(name)
     -- behaviour that is worst to debug. Re-scanning costs one hidden tooltip.
     if cost then self.costCache[name] = cost end
     return cost
+end
+
+-- The radius a spell affects, in yards, or nil when the tooltip does not say.
+--
+-- Read rather than tabulated, for the same reason SpellCost is: a totem's reach
+-- differs per totem and per rank (a Magma hits eight yards, an aura totem
+-- twenty), and a guessed twenty would call a Magma "in range" from fifteen
+-- yards away while it is hitting nothing at all.
+--
+-- The number lives in the description text, not in the range field on line two
+-- - that one is how far you may CAST it, which for a totem is your own feet. So
+-- the left-hand lines are scanned for the first "N yards"; scanning the left
+-- side only is also what keeps the cast range on the right of line two out of
+-- it. Pattern and approach follow Call of Elements, which does the same read.
+function Aegis_SBR:SpellRadius(name)
+    if not self.radiusCache then self.radiusCache = {} end
+    local hit = self.radiusCache[name]
+    if hit then return hit end
+    local slot = self:FindSpellSlot(name)
+    if not slot then return nil end
+    if not scanTip then
+        scanTip = CreateFrame("GameTooltip", SCAN_TIP, nil, "GameTooltipTemplate")
+    end
+    scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+    scanTip:ClearLines()
+    scanTip:SetSpell(slot, BOOKTYPE_SPELL)
+    local radius
+    for i = 2, 8 do
+        local fs = getglobal(SCAN_TIP .. "TextLeft" .. i)
+        local txt = fs and fs:GetText()
+        if txt then
+            local _, _, n = string.find(txt, "(%d+)%.?%d* +ya?r?ds?")
+            if n then radius = tonumber(n); break end
+        end
+    end
+    -- Only successful reads are cached, same as SpellCost: a tooltip that
+    -- failed to populate once must not freeze "no radius" in place.
+    if radius then self.radiusCache[name] = radius end
+    return radius
 end
 
 -- Can the player pay for this spell right now? UnitMana returns whichever
@@ -1343,6 +1383,7 @@ ev:SetScript("OnEvent", function()
         Aegis_SBR:Banner()
     elseif event == "CHARACTER_POINTS_CHANGED" then
         Aegis_SBR.costCache = nil
+        Aegis_SBR.radiusCache = nil
     elseif event == "SPELLS_CHANGED" then
         -- learning a spell or rank invalidates the spellbook index and any
         -- cached profile validity, both rebuilt lazily on the next use
