@@ -44,6 +44,10 @@ function M:BuildBody(ui, parent)
     self.earthDD = L:Dropdown("totemEarth", "Earth totem", 160, set("totemEarth"))
     self.fireDD  = L:Dropdown("totemFire", "Fire totem", 160, set("totemFire"))
     self.aoeFireRow = L:Row{ key = "aoeFireTotems", label = "AoE fire pair (Nova + Magma)", onToggle = set("aoeFireTotems") }
+    -- Both need SuperWoW: a placed totem is only addressable as a unit there,
+    -- and without that there is no distance to measure.
+    self.totemRangeRow = L:Row{ key = "totemRange", label = "Re-place when out of range", onToggle = set("totemRange") }
+    self.totemRecallRow = L:Row{ key = "totemRecall", label = "Totemic Recall when left behind", onToggle = set("totemRecall") }
     self.airDD   = L:Dropdown("totemAir", "Air totem", 160, set("totemAir"))
 
     L:Header("Cooldowns & utility")
@@ -106,6 +110,8 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.chainRow.slider, "Chain Heal count", "How many hurt allies are needed before Chain Heal fires.")
     ui:Tip(self.totemsRow.cb, "Maintain totems", "Keeps the totems below dropped in every spec, re-cast during a lull. Cast timing is tracked from your actual casts (SuperWoW), not a blind clock.")
     ui:Tip(self.aoeFireRow.cb, "AoE fire pair (Nova + Magma)", "Takes over the fire slot: Fire Nova Totem every time its cooldown is up, Magma Totem in between to keep the ground ticking.", "The two cannot both sit in the picker above, because the point is to alternate them - Fire Nova detonates after a few seconds and then waits on a cooldown, so it behaves like a cooldown ability while Magma is the sustained damage. They share one totem slot in game, so Magma is held back while a Nova is still standing rather than replacing the detonation you just paid for. While this is on, the fire picker above is ignored.")
+    ui:Tip(self.totemRangeRow.cb, "Re-place when out of range", "Measures the real distance to your own totems and treats one you have walked away from as missing, so it is re-placed where you actually are.", "This is the only check that works for the totems granting no aura at all - Searing, Magma, Fire Nova, Grounding - which the blind timer serves worst: it happily counts down on a totem the group left behind two rooms ago. Needs SuperWoW; without it there is no distance to measure and nothing changes.")
+    ui:Tip(self.totemRecallRow.cb, "Totemic Recall when left behind", "Pulls all totems back for a quarter of their mana once every one of them is out of reach and nobody in the group is standing in them either.", "All-or-nothing on purpose: the spell recalls every totem at once, so with three still doing their job it would throw those away for a sliver of mana. The group check matters for Mana Spring and Healing Stream, which serve the party rather than you. The real gain is less the mana than the slots reading as empty immediately, so they are re-dropped where you are instead of waiting out the timer.")
     ui:Tip(self.weaveRow.cb, "Weave damage", "When nobody needs healing and you have an enemy targeted, cast Lightning Bolt in the downtime.", "Mana-gated so it never starves heals. Off by default - same as /sbr weave on|off.")
     ui:Tip(self.weaveRow.slider, "Weave mana floor", "Only weave damage while your mana is above this percent.")
     ui:Tip(self.waterDD, "Water totem", "Which water totem to keep down. Mana Spring restores party mana.")
@@ -206,6 +212,8 @@ function M:RefreshBody(ui, buf)
     ui:BindCheck(self.chainRow, buf.useChainHeal ~= false, "Chain Heal")
     ui:BindCheck(self.totemsRow, buf.useTotems ~= false)
     ui:BindCheck(self.aoeFireRow, buf.aoeFireTotems)
+    ui:BindCheck(self.totemRangeRow, buf.totemRange)
+    ui:BindCheck(self.totemRecallRow, buf.totemRecall)
     -- The picker and the pair own the same slot, so whichever is inactive is
     -- greyed rather than left looking as if both apply.
     if buf.aoeFireTotems then
