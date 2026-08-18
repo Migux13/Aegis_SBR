@@ -126,6 +126,10 @@ local TOTEM_SLOTS = { "water", "earth", "fire", "air" }
 local RECALL_SPELL = "Totemic Recall"
 
 local TOTEM_REDROP_DEFAULT = 110
+-- How far before its real expiry a totem is re-dropped when the duration was
+-- read from the tooltip. Matches the few-seconds-early margin the table above
+-- already bakes into its hardcoded values.
+local TOTEM_REDROP_EARLY = 3
 local TOTEM_REDROP = {
     ["Searing Totem"]           = 55,
     ["Magma Totem"]             = 18,
@@ -140,6 +144,11 @@ local TOTEM_REDROP = {
     ["Strength of Earth Totem"] = 110,
     ["Stoneskin Totem"]         = 110,
     ["Tremor Totem"]            = 110,
+    -- 15s totem, so the blind clock has to be tight. It also grants no player
+    -- aura (it is a taunt/absorb pet, not a buff), which puts it in the same
+    -- group as Searing/Magma/Grounding: without ClassicAPI's slot read this
+    -- clock IS the whole knowledge of whether it still stands.
+    ["Stoneclaw Totem"]         = 13,
 }
 
 -- Shock debuff texture on the TARGET (fragment match), for Flame Shock upkeep.
@@ -163,7 +172,11 @@ M.imbueAlias = { rockbiter = "rockbiter", rb = "rockbiter",
 -- Restoration totem picks (key -> spell), resolved per element. Names are
 -- vanilla baselines - confirm against Turtle's spellbook with /sbr debug.
 M.WATER_TOTEMS = { manaspring = "Mana Spring Totem", healingstream = "Healing Stream Totem", none = "" }
-M.EARTH_TOTEMS = { strength = "Strength of Earth Totem", stoneskin = "Stoneskin Totem", tremor = "Tremor Totem", none = "" }
+-- Stoneclaw is offered even though it TAUNTS: kept on upkeep it will pull mobs
+-- off the tank every time it is re-dropped. That is the player's call to make,
+-- not ours (user decision, 2026-08-18) - it is genuinely wanted for solo and for
+-- pet-style kiting. It is not a default anywhere.
+M.EARTH_TOTEMS = { strength = "Strength of Earth Totem", stoneskin = "Stoneskin Totem", tremor = "Tremor Totem", stoneclaw = "Stoneclaw Totem", none = "" }
 M.FIRE_TOTEMS  = { searing = "Searing Totem", magma = "Magma Totem", firenova = "Fire Nova Totem", flametongue = "Flametongue Totem", none = "" }
 M.AIR_TOTEMS   = { windfury = "Windfury Totem", graceofair = "Grace of Air Totem", natureresist = "Nature Resistance Totem", grounding = "Grounding Totem", windwall = "Windwall Totem", none = "" }
 
@@ -381,6 +394,18 @@ function M:MaintainFlameShock()
     if self:TargetDebuffUp("Flame Shock", tex) then return false end
     local detectable = tex or Aegis_SBR:CanResolveDebuffNames()
     local now = GetTime()
+    -- ClassicAPI knows the real expiration, INCLUDING Turtle's Molten Blast
+    -- refresh of the caster's own Flame Shock (audit item S1) - which the blind
+    -- clock could never see, so it re-shocked a debuff Molten Blast had just
+    -- topped up. A known remaining time means it is genuinely still ticking and
+    -- the snapshot above has merely not caught up; hold. Unknown falls through
+    -- to the blind clock exactly as before.
+    if Aegis_SBR.TargetDebuffRemaining then
+        local mine = Aegis_SBR:TargetDebuffMine("Flame Shock")
+        if mine ~= false and Aegis_SBR:TargetDebuffRemaining("Flame Shock") then
+            return false
+        end
+    end
     if not detectable and (now - (self.flameT or 0)) < FLAMESHOCK_DUR then return false end
     if self:Queue("Flame Shock", "DoT missing") then
         self:Later(function() self.flameT = now end)
@@ -695,6 +720,56 @@ function M:OnCastEvent(caster, target, spellName)
     end
 end
 
+-- ============================================================
+-- ClassicAPI totem tracking
+-- ============================================================
+-- Aegis's own element keys against ClassicAPI's numeric slots
+-- (1 Fire, 2 Earth, 3 Water, 4 Air).
+local CAPI_SLOT = { fire = 1, earth = 2, water = 3, air = 4 }
+
+-- What is ACTUALLY standing in an element slot, and for how long.
+-- Returns name, secondsRemaining - or nil when ClassicAPI is absent or the slot
+-- is empty. nil is "no answer", never "empty" - callers must fall through.
+function M:CapiTotem(key)
+    local slot = CAPI_SLOT[key]
+    if not slot then return nil end
+    if not Aegis_SBR.TotemSlot then return nil end
+    return Aegis_SBR:TotemSlot(slot)
+end
+
+-- PLAYER_TOTEM_UPDATE (ClassicAPI) fires on drop, expiry AND early destruction
+-- - a totem killed by a mob or pulled back with Totemic Recall. Vanilla cannot
+-- see that case at all, which is the whole reason the redrop clock existed.
+--
+-- On a slot going empty the clock is zeroed so the very next press redrops
+-- instead of waiting out the remainder of an interval for a totem that is no
+-- longer standing. The per-spell cast stamp is cleared too, or the aura-miss
+-- learning below would count the destruction as evidence that the buff NAME is
+-- wrong and eventually write off a perfectly good totem.
+function M:OnTotemUpdate(slot)
+    if not slot then return end
+    local key
+    for k, v in pairs(CAPI_SLOT) do
+        if v == slot then key = k; break end
+    end
+    if not key then return end
+    -- Routed through CapiTotem so the capability guard lives in exactly one
+    -- place: the event can only fire with ClassicAPI loaded, but the capability
+    -- FILE is optional in the load order, same as Preview and Pet.
+    local name = self:CapiTotem(key)
+    if not name then
+        self.totemT[key] = 0
+        -- Only this slot's spells: a destroyed fire totem says nothing about
+        -- the water slot's bookkeeping.
+        for spell, s in pairs(self:TotemElementMap()) do
+            if s == key then
+                self.totemCastT[spell] = nil
+                self.totemBuffMiss[spell] = 0
+            end
+        end
+    end
+end
+
 -- Distance from the player to the totem standing in this slot, in yards, or
 -- nil when it cannot be measured (no SuperWoW, totem never seen, totem gone).
 -- nil always means "cannot judge" and must never be read as "out of range".
@@ -819,6 +894,13 @@ end
 -- stand in, which is the old behaviour on a client that cannot do better.
 function M:TryTotem(key, spell, now)
     if (now - (self.totemTryT[key] or 0)) < TOTEM_RETRY then return false end
+    -- Most totems have no cooldown, but some do - Grounding and Fire Nova at 15s,
+    -- Stoneclaw at 30s against a 15s duration, i.e. a guaranteed dead window every
+    -- cycle. Without this gate the slot is retried every TOTEM_RETRY throughout
+    -- that window: the casts fail harmlessly (off-GCD, error suppressed), but each
+    -- one stamps totemTryT, so the FIRST genuinely castable attempt is delayed by
+    -- up to another retry interval. Suppress-only - it can never add a cast.
+    if not self:IsReady(spell) then return false end
     -- Cheapest way to avoid a failed cast is not to attempt one. The cost comes
     -- from the spellbook tooltip, and an unreadable cost counts as affordable,
     -- so this can never be the reason a totem stays down.
@@ -860,6 +942,36 @@ function M:MaintainTotem(key, spell, interval)
     if cfgTotemRange and self:TotemOutOfRange(key) then
         return self:TryTotem(key, spell, now)
     end
+
+    -- ClassicAPI reads the element slot directly, which is the ground truth the
+    -- rest of this function had to infer. It supersedes BOTH branches below:
+    --   * the aura path, including its buff-name guessing and the miss-counting
+    --     that exists only to survive a wrong name - there is no name involved
+    --     here, so nothing to get wrong;
+    --   * the blind redrop clock, which is the one that serves no-aura totems
+    --     (Searing, Magma, Grounding, Fire Nova) worst.
+    -- It also covers early destruction: a killed totem leaves the slot empty and
+    -- is redropped on the next press instead of after the remainder of a clock.
+    --
+    -- Deliberately AFTER the range check: a totem standing at full duration but
+    -- out of its radius still counts as missing, and the slot cannot know that.
+    local capiName, capiRemain = self:CapiTotem(key)
+    if capiName then
+        if capiName == spell then
+            -- Ours, standing, and the slot says how long it has left.
+            -- TOTEM_APPLY_GRACE is not needed here: the slot is stamped from the
+            -- cast packet, so there is no registration lag to wait out.
+            if not capiRemain or capiRemain > 0 then return false end
+        end
+        -- A DIFFERENT totem occupies the slot (dropped by hand, or a Mana Tide
+        -- bumping Healing Stream). The configured one is not up, so redrop it -
+        -- the same conclusion the aura path reaches, reached without guessing.
+        return self:TryTotem(key, spell, now)
+    elseif Aegis_SBR.Capability and Aegis_SBR:Capability("totems") then
+        -- Slot is genuinely empty and we can see that authoritatively.
+        return self:TryTotem(key, spell, now)
+    end
+
     local mapped, own = self:TotemBuffNames(spell)
 
     if mapped then
@@ -897,6 +1009,23 @@ function M:MaintainTotem(key, spell, interval)
     end
 
     if not interval then interval = TOTEM_REDROP[spell] or TOTEM_REDROP_DEFAULT end
+    -- The table holds MAX-RANK durations, but a totem's duration is rank
+    -- dependent: rank 1 Searing lasts 30s where the table says 55, so a levelling
+    -- shaman's fire slot sat empty for 25 seconds. The tooltip knows the real
+    -- number for the rank actually known (see Aegis_SBR:SpellDuration).
+    --
+    -- Taken as a CEILING, never a replacement: min() means a tooltip read can
+    -- only ever make the redrop EARLIER, never later. A misparse that returned
+    -- something large therefore cannot regress today's behaviour, and the table
+    -- stays the guarantee.
+    if Aegis_SBR.SpellDuration then
+        local real = Aegis_SBR:SpellDuration(spell)
+        if real then
+            local early = real - TOTEM_REDROP_EARLY
+            if early < 5 then early = 5 end
+            if early < interval then interval = early end
+        end
+    end
     if (now - (self.totemT[key] or 0)) < interval then return false end
     return self:TryTotem(key, spell, now)
 end

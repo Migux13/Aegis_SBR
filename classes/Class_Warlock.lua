@@ -507,6 +507,27 @@ end
 -- so there is no "currently channeling" case to handle - only "did the last
 -- completed channel on this target overlap this DoT's lifetime".
 function M:DotRemaining(spellName)
+    -- ClassicAPI, when present, knows the server's real expiration for a debuff
+    -- on ANOTHER unit, including the caster-modified duration - so Rapid
+    -- Deterioration, Dark Harvest and Conflagrate's Immolate shave are already
+    -- folded in, and none of the estimation below is needed.
+    --
+    -- Three conditions before we trust it:
+    --   * a remaining time is actually known (nil = the cast predates login or
+    --     the cache evicted; that is UNKNOWN, not zero)
+    --   * the DoT is OURS. mine == false means another warlock's, and refreshing
+    --     our own priority off someone else's timer would be wrong. mine == nil
+    --     is "cannot tell" and is accepted, matching the pre-ClassicAPI
+    --     assumption that a tracked DoT on our target is ours.
+    -- Anything else falls through to the original estimate below, unchanged.
+    if Aegis_SBR.TargetDebuffRemaining then
+        local mine = Aegis_SBR:TargetDebuffMine(spellName)
+        if mine ~= false then
+            local exact = Aegis_SBR:TargetDebuffRemaining(spellName)
+            if exact then return exact end
+        end
+    end
+
     local dur = self.dotDuration[spellName]
     if not dur then return nil end
     if self.rapidDetSpells[spellName] then
