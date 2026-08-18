@@ -66,10 +66,27 @@ the bounding-radius effect confirmed on a worldboss) but it is on the "adds cast
 its sibling change caused the Auto Shot regression — see the Lessons list and
 `docs/research-classicapi.md`.
 
-**Open verification** (the probe log collects it passively — `/sbr probe on`, play, `/reload`,
-then `py scripts/read_probe.py`): Rupture combo-point duration (expect `dur=16.0` at 5 CP vs a
-`6.0` base — 5 CP is the decisive single test); Warlock DoT timers; Shaman Flame Shock + totem
-destruction in play; `markOK` against another hunter's Mark; `C_LossOfControl` (unused so far).
+**Verified in play (2026-08-18):** enemy debuff timers with caster; combo-point + talent
+durations (Rupture at 5 CP reads 22s = 16 base + 6 from *Taste for Blood*); Warlock DoT
+durations matching the module's own model to the decimal; totem destruction (Totemic Recall
+emptied two slots in one instant, both back in 0.11s / 0.34s); spell range in both directions
+with the bounding-radius effect on a worldboss.
+
+**The no-ClassicAPI fallback is verified too** — Hunter and Shaman both run with
+`ClassicAPI.dll` removed from `dlls.txt`: no load errors, rotation fires, totems are placed,
+the range window shows a real distance. That last one only works because the distance comes
+from **UnitXP_SP3** (Required), not from ClassicAPI; getting that source order wrong is what
+made the window dead-on-arrival without the DLL in the first draft.
+
+**Still open:** Shaman *Flame Shock* + *Molten Blast* refresh (audit item S1 — needs Elemental
+spec, no Flame Shock cast under the probe yet); `markOK` against **another** hunter's Mark in a
+raid; `C_LossOfControl` (wrapped but unused); the whole Subtlety rogue path. Also unconfirmed:
+whether the tooltip-duration fix actually shortens rank-1 Searing to ~27s — it is dead code on
+a ClassicAPI client, so only a no-ClassicAPI shaman exercises it, and the run so far only
+confirmed that totems are placed at all.
+
+The probe log collects most of this passively — `/sbr probe on`, play, `/reload`, then
+`py scripts/read_probe.py`.
 
 ### Carried forward
 - **Warrior Overpower** (open since v1.1.4): reported as passed over for Slam/Heroic Strike,

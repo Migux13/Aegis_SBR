@@ -45,6 +45,12 @@ local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
 -- the spell tooltip shows only the BASE duration - so a talented rogue's Slice
 -- and Dice really lasts 13.05-30.45s, not the 9-21s the tooltip implies.
 local TALENT_TASTE = "Taste for Blood"
+-- Expose Armor is only worth five combo points WITH this talent, which is what
+-- makes it beat the warrior's Sunder stack instead of duplicating it. Reported
+-- from play (2026-08-18): without it, drop Expose Armor from the rotation
+-- entirely rather than paying a finisher's worth of points every 30s for a
+-- redundant debuff.
+local TALENT_IEA = "Improved Expose Armor"
 -- Default renew window: seconds of remaining buff time at or below which Slice
 -- and Dice / Envenom are re-applied. Overridable per profile via cfg.buffRenew.
 -- This used to be 5, sized for the era when the remaining time was ESTIMATED
@@ -137,7 +143,19 @@ function M:NormalizeProfile(c)
     -- surplus goes into Eviscerate first and the buff is refreshed on the next
     -- press with the point Ruthlessness hands back. 5 = no ceiling, which is
     -- what the rotation always did.
-    if c.refreshMaxCP == nil then c.refreshMaxCP = 5 end
+    --
+    -- Subtlety defaults to 1 instead, because that IS its rotation rather than a
+    -- tuning preference: 5-CP finishers with a 1-CP Slice and Dice refresh in
+    -- between, off the point Ruthlessness hands straight back (play report,
+    -- 2026-08-18). Assassination keeps 5 - v1.1.8 measured 1 as right for short
+    -- dungeon fights and wrong in a raid, where the buff runs its full length.
+    --
+    -- c.spec is settled at the top of this function, so reading it here is safe.
+    -- It has to happen HERE and not further down with the other Subtlety fields:
+    -- by then the field is no longer nil and an override would never fire.
+    if c.refreshMaxCP == nil then
+        c.refreshMaxCP = (c.spec == "subtlety") and 1 or 5
+    end
     -- Retired: a combo point FLOOR for refreshes. Measured over 1355 presses it
     -- pushed Envenom uptime from 84% down to 61% and pinned the rotation at
     -- 2 combo points, because reaching the floor costs a builder GCD during
@@ -334,6 +352,11 @@ local EXPOSE_RETRY = 25
 function M:ExposeDue(cfg)
     if not cfg.useExposeArmor then return false end
     if not self:KnowsSpell("Expose Armor") then return false end
+    -- Without Improved Expose Armor the debuff only matches the warrior's Sunder
+    -- stack instead of beating it, so five combo points every 30s buy nothing the
+    -- raid did not already have. Suppress-only: this can stop a cast, never add
+    -- one, so it cannot starve anything the way a widened gate could.
+    if self:TalentRank(TALENT_IEA) < 1 then return false end
     if self:TargetDebuffUp("Expose Armor", "Ability_Warrior_Riposte") then return false end
     if self.exposeT and self.exposeId and self.exposeId == self:TargetId()
         and (GetTime() - self.exposeT) < EXPOSE_RETRY then
