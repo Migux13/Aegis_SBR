@@ -137,8 +137,16 @@ taunt when the target isn't on you → Stormstrike → shock (Earth default) →
 → totems → optional LB. **Restoration**: Mana Tide ≤25% mana → NS-equivalent → instant
 max-rank Healing Wave (emergency ≤40%) → Lesser Healing Wave (≤50%, beats AoE) → Chain Heal
 (≥3 hurt) → downranked Healing Wave → Water Shield → totems → optional LB damage weave.
-Totem clocks are stamped by SuperWoW `UNIT_CASTEVENT` (manual drops reset the right slot)
-with 55s water / 110s other redrop timers.
+
+> **Updated past Phase 1 (v1.1.7 and v1.1.9, not re-audited — noted here so this section
+> stays accurate as a baseline):** totem upkeep no longer runs on the blind 55s/110s clocks
+> described below. v1.1.7 replaced them with the totem's own player-granted aura where one
+> exists, plus per-totem intervals for those that grant none. v1.1.9 reads the element slot
+> directly through ClassicAPI where it is installed, which also covers the aura-less totems
+> and detects a totem **destroyed** rather than expired; the intervals themselves now come
+> from the spell tooltip, because they are rank dependent. Players without ClassicAPI still
+> run the v1.1.7 path. See `docs/roadmap.md` Phase 2 for the detail. The rest of this
+> section (S1-S9) is unchanged and still reflects the current code.
 
 ### Discrepancies
 
@@ -166,9 +174,11 @@ with 55s water / 110s other redrop timers.
   Water Shield → totems) matches the `[V]` sketch; rank tables are flagged in-code as
   vanilla baselines pending the Phase 3 live tuning — consistent with research's own
   "needs `[?]` tuning".
-- The cross-spec totem system with `UNIT_CASTEVENT` stamping is beyond research; Phase 2
-  adds destruction detection. Redrop intervals (55s/110s) are already flagged in-code for
-  Turtle-duration tuning. ✓
+- The cross-spec totem system is beyond research; Phase 2's destruction-detection item is
+  DONE — v1.1.7's aura-read covered the totems that grant one, v1.1.9's ClassicAPI slot read
+  and `PLAYER_TOTEM_UPDATE` closed the aura-less gap and were verified in play. Redrop
+  intervals are no longer vanilla baselines: they are read from the spell tooltip, which is
+  rank- and server-correct by construction. ✓
 
 ---
 

@@ -38,6 +38,22 @@ the `AegisUI_*` prefix.)
 - Casting primitives: `Cast(name)` (reports success if merely KNOWN — see the caveat in the
   Warrior module header), `Queue(name)` (uses Nampower queueing), `Try(name)` /
   `CanCast(name, cost, stances)` wrappers in some modules.
+- Shared resource/timing helpers (core, v1.1.8+): `Aegis_SBR:SpellCost(name)` /
+  `CanAfford(name)` read a spell's real cost off the spellbook **tooltip** (cached, dropped
+  on `SPELLS_CHANGED`/`CHARACTER_POINTS_CHANGED`) instead of a hardcoded table, so a talent
+  that shifts a cost is never fought — prefer this over a new per-class rage/energy/mana
+  table. `Aegis_SBR:TargetTTK()` estimates seconds-to-kill from a rolling window of the
+  target's health percent; it returns `nil` (never a guess) until it has enough samples,
+  and every caller must treat `nil` as "not dying soon" — it is accurate enough to **veto**
+  an action, not to **trigger** one (see the Rogue execute logic for the failure mode when
+  that line was crossed: TTK briefly triggered execute and fired it on a single combo point
+  against ordinary trash, since a normal mob's whole life is shorter than any sane window).
+  `Aegis_SBR:SpellRadius(name)` and `Aegis_SBR:SpellDuration(name)` (v1.1.9) read the same
+  way and for the same reason — both numbers are **rank dependent**, so a hardcoded table is
+  wrong for every rank but one. `SpellDuration` exists because rank 1 *Searing Totem* lasts
+  30s where the shaman's table said 55, leaving a levelling shaman's fire slot empty for 25
+  seconds. Both return `nil` when the tooltip cannot be read, and callers keep their own
+  fallback: these correct a number, they do not replace the caller's judgement.
 - Heal engines: four near-identical copies live in the healer modules
   (Paladin/Priest/Druid/Shaman) — slated for dedupe (roadmap Phase 2). Touch with care;
   changing one usually means changing all four until deduped.

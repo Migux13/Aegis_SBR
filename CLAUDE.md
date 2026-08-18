@@ -253,6 +253,11 @@ calculators block automated access.
     `(arg or "") == "on"` — that idiom sends every unrecognised argument, the empty one
     included, to `false`, so a bare command silently disables what it was meant to toggle
     (fixed v1.1.5 in three places). Test its result with `== nil`; `false` is a valid return.
+  - `GetWeaponEnchantInfo` returns **six** values on 1.12, not seven — an assumed extra
+    return shifted `hasOffHand` onto the off-hand *expiration*, so the off-hand reading was
+    silently wrong. Latent from v0.15.0 until v1.1.8 because only the main hand had a
+    caller. When a 1.12 API's return count is assumed rather than counted, check it against
+    a live call before building on the later values.
   - A second detection source (ClassicAPI) wired into a gate may only ever **suppress** a
     cast, never shorten a throttle or unblock one. Letting it shorten the sting retry while
     the OLD detection still decided whether to cast re-queued a ranged shot every 1.5s and
