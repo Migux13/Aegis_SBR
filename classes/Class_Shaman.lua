@@ -846,9 +846,30 @@ function M:RecallDue(cfg)
     for i = 1, table.getn(TOTEM_SLOTS) do
         local slot = TOTEM_SLOTS[i]
         local guid = self.totemGuid[slot]
-        if guid and UnitExists(guid) then
+        local live = (guid and UnitExists(guid)) and true or false
+        -- ClassicAPI reads the element slot from the client's own totem tracker,
+        -- which does NOT need the totem's object to be loaded. That fixes the
+        -- exact case this feature exists for: walk far enough away and the client
+        -- drops the distant object, so UnitExists(guid) goes false, the totem
+        -- stops counting as standing, and the recall can never fire. Reported
+        -- from play as "recall only works with a mob targeted" - with a target
+        -- you are usually still close enough for the object to be loaded.
+        local capiName = self:CapiTotem(slot)
+
+        if live or capiName then
             standing = standing + 1
-            if self:TotemOutOfRange(slot) and not self:GroupNearTotem(guid, self:TotemRadius(slot)) then
+            if live then
+                -- Object loaded: measure properly, and leave it alone if a group
+                -- member is still standing in its radius.
+                if self:TotemOutOfRange(slot) and not self:GroupNearTotem(guid, self:TotemRadius(slot)) then
+                    stranded = stranded + 1
+                end
+            else
+                -- The slot says a totem stands but the client has no object for
+                -- it. A totem cannot move, so losing its object IS the distance
+                -- evidence. The group check is skipped here because it needs a
+                -- position - accepted, because a totem too far for the shaman's
+                -- own client to keep loaded is not one the party is still using.
                 stranded = stranded + 1
             end
         end
