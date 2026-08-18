@@ -152,21 +152,58 @@ from the polish backlog if built.
 
 ## Phase 2 — Engine robustness & code health
 
-- **Shaman totem destruction detection**: tag totem GUIDs on cast (SuperWoW) and watch the
-  combat log's owner-tagging for a totem dying, then re-drop — instead of relying only on
-  expiry timers.
+- **Shaman totem destruction detection.**
+  > **STATUS: DONE and verified in v1.1.9.** It took two goes, and neither used the
+  > GUID-plus-combat-log watch planned here.
+  >
+  > **v1.1.7** made totem upkeep read the **player's own aura** where the totem grants one
+  > (`Class_Shaman.lua`, `MaintainTotem`) — one check answering expiry, destruction, Totemic
+  > Recall and walking out of range at once. A totem name was trusted only once its aura had
+  > actually been *seen* after a cast, so a wrong entry in the name table degraded to the
+  > timer instead of spamming the slot. The same release replaced the two blanket redrop
+  > constants (55s water / 110s everything else) with **per-totem** intervals, because the
+  > blanket number was sized for 120s totems and left short ones missing for most of their
+  > cycle. **The gap:** totems that grant no aura at all — Searing, Magma, Fire Nova,
+  > Grounding — had nothing to read and still ran on a clock, which is exactly the set the
+  > clock serves worst.
+  >
+  > **v1.1.9** closed that gap with ClassicAPI: `GetTotemInfo` reads the element slot
+  > directly (no aura, no name guessing, no clock) and `PLAYER_TOTEM_UPDATE` fires on a
+  > totem **killed or recalled** rather than expired. Verified in play — Totemic Recall
+  > emptied two slots in the same instant and both were re-dropped 0.11s and 0.34s later.
+  > Two further fixes fell out of it: the per-totem intervals were still max-rank values
+  > (rank 1 Searing lasts 30s, the table said 55), now read from the spell tooltip via
+  > `Aegis_SBR:SpellDuration`; and a totem on cooldown was retried every 1.5s through its
+  > dead window. Both of those help players **without** ClassicAPI, who still run the
+  > v1.1.7 aura-and-clock path.
+  >
+  > Totem aura **names remain vanilla baselines** and want confirming on Turtle via
+  > `/sbr debug` — they still matter on the no-ClassicAPI path. See
+  > `docs/audit-phase1-rotations.md` item S9.
 - **Heal-engine dedupe**: unify the four near-identical heal engines
   (Paladin/Priest/Druid/Shaman) into one shared module; class modules pass config in.
+  **Still open** — untouched as of v1.1.9.
 - **Weapon-enchant awareness / poison + imbue upkeep** (Rogue + Shaman; per-class UI toggle):
   detect and optionally maintain weapon imbues (Shaman) and poisons (Rogue). **Full feasibility
   study in `docs/research-weapon-enchant-upkeep.md` — read it first.**
-  > **STATUS: first cut SHIPPED in v0.15.0** — shared detection helper
-  > (`Aegis_SBR:WeaponEnchant`/`WeaponEnchantId`), Shaman main-hand imbue upkeep
-  > (out-of-combat auto-apply + in-combat opt-in, default OFF), Rogue poison pre-pull
-  > reminder (warn-only). **Still open:** off-hand imbue; Rogue poison auto-apply (needs the
-  > replace-popup + in-combat-application dummy tests, items 3 & 4 in the research doc); and
-  > topping-up an imbue that's present-but-low via overwrite (blocked on the popup test —
-  > currently warn-only).
+  > **STATUS: first cut SHIPPED in v0.15.0**, substantially extended in v1.1.7/v1.1.8.
+  > Shaman imbue upkeep now runs in **every spec** (Restoration and Elemental included, not
+  > just Enhancement/Tank) as two independent, either-alone routes: automatic
+  > (out-of-combat auto-apply, in-combat opt-in, default OFF) and a manual clickable rebuff
+  > button ported from BuffUp's item-slot-watch mode to its spell-slot-watch mode (v1.1.7).
+  > The two Rogue poison buttons gained a low-charge warning state (≤5 charges: yellow,
+  > blinking, shows the count) so the prompt appears **before** the poison is gone, not only
+  > after (v1.1.8) — still a pre-pull-style reminder, not mid-fight automation. Found and
+  > fixed alongside it: `Aegis_SBR:WeaponEnchant`'s off-hand reading was landing on the
+  > wrong field (`GetWeaponEnchantInfo` returns **six** values on 1.12, not seven — a stray
+  > extra return shifted `hasOH` onto the off-hand expiration), latent until v1.1.8 because
+  > only the main hand had ever been wired to a caller.
+  > **Still open:** off-hand imbue is explicitly deferred, not attempted-and-blocked — the
+  > in-code comment calls it "a fragile weapon-click flow"; Rogue poison auto-apply beyond
+  > the click-driven Quick Bar/warning button (needs the replace-popup + in-combat-
+  > application dummy tests, items 3 & 4 in the research doc); and topping up an
+  > imbue that's present-but-low via overwrite (blocked on the popup test — currently
+  > warn-only).
 
   Key findings:
   - **Primary API is `GetWeaponEnchantInfo()`** (returns `has*`, **`*Expiration` in ms**,
