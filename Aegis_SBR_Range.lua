@@ -23,17 +23,27 @@
 -- frame or a mob size; the MARKER COLOUR comes straight from the live in-range
 -- check. So the colour is never wrong even while the zones are still settling.
 --
--- DISTANCE SOURCES, in priority order, all established by measurement:
---   1. UnitXP_SP3's UnitXP("distanceBetween", ...) - a REQUIRED dependency, and
---      it resolves NPCs. This is why the window works for every player.
---   2. ClassicAPI's UnitDistanceSquared - also covers NPCs.
---   3. SuperWoW's UnitPosition - LAST, because it was measured to resolve for
---      players only: every NPC target in a 40-minute capture returned nil. It
---      cannot be the primary source for a window about the distance to a mob.
+-- DISTANCE SOURCES. Order established by measurement, and corrected twice:
+--   1. ClassicAPI's UnitDistanceSquared - CENTRE TO CENTRE, covers NPCs.
+--   2. UnitXP_SP3's UnitXP("distanceBetween", ...) - Required, covers NPCs, but
+--      HITBOX-ADJUSTED, so a systematically smaller number on a large mob.
+--   3. SuperWoW's UnitPosition - last, measured to resolve for players only:
+--      every NPC target in a 40-minute capture returned nil, so it can never be
+--      primary for a window whose whole job is the distance to a mob.
 --
--- Getting that order wrong is what the first version did: it led with
--- UnitPosition, and the window showed "?" against every mob on a client without
--- ClassicAPI - a dead feature dressed up as a graceful degradation.
+-- Two corrections are baked into that list, both from play reports. Leading with
+-- UnitPosition showed "?" against every mob without ClassicAPI - a dead feature
+-- dressed up as graceful degradation. Then leading with UnitXP silently changed
+-- the METRIC, so the number no longer matched the scale's tick labels.
+--
+-- Centre-to-centre wins because it is the model the ticks and the client's own
+-- spell ranges use: a 30yd spell reaches 30yd centre to centre PLUS the target's
+-- radius. Under a hitbox-adjusted number that same spell reads as reaching at
+-- "27 yd" on a big mob, contradicting the scale it is drawn against.
+--
+-- See AR:Cal - the learned edges are keyed to the metric tag, so switching
+-- source discards them instead of leaving the marker drifting against bands
+-- that were learned in the other unit.
 --
 -- What ClassicAPI still changes: the BAND EDGES. Without it the distance and the
 -- marker are exact but the bands fall back to flat thresholds, marked with a
@@ -163,13 +173,22 @@ function AR:ApplyScale(scale)
     end
 end
 
--- Learned band edges, per character.
-function AR:Cal()
+-- Learned band edges, per character AND per distance metric.
+--
+-- The metric tag is stored with them because edges learned centre-to-centre are
+-- simply wrong once a hitbox-adjusted source takes over: the numbers are
+-- systematically smaller, so the marker drifts left of bands that never moved.
+-- That is exactly the breakage reported on 2026-08-18 after the source order
+-- changed. Dropping the calibration on a metric change makes it self-healing,
+-- rather than something a player has to know to fix with /sbr range reset.
+function AR:Cal(metric)
     local db = self:DB()
     if not db then return nil end
-    if type(db.cal) ~= "table" then
-        db.cal = { mMax = DEF_MELEE_MAX, rMin = DEF_RANGED_MIN, rMax = DEF_RANGED_MAX }
+    if type(db.cal) ~= "table" or (metric and db.cal.metric and db.cal.metric ~= metric) then
+        db.cal = { mMax = DEF_MELEE_MAX, rMin = DEF_RANGED_MIN, rMax = DEF_RANGED_MAX,
+                   metric = metric }
     end
+    if metric and not db.cal.metric then db.cal.metric = metric end
     return db.cal
 end
 
@@ -182,35 +201,49 @@ end
 -- UnitPosition is SuperWoW's. ClassicAPI defines a same-named global with a
 -- different shape and load order decides which is live, so the third return is
 -- treated as optional - true of both shapes.
+-- Returns distance, metricTag. The TAG matters: the two good sources do not
+-- measure the same thing, and mixing them silently is what broke this window
+-- once already (2026-08-18, reported from play as "it no longer measures from
+-- the mob's centre").
+--
+--   "c2c"  ClassicAPI UnitDistanceSquared - centre to centre.
+--   "hb"   UnitXP_SP3 default mode - hitbox-adjusted, so systematically SMALLER
+--          against a large mob.
+--
+-- Centre-to-centre is preferred, because that is the model the scale's own tick
+-- labels and the client's spell ranges use: a 30yd spell reaches 30yd centre to
+-- centre PLUS the target's radius. Under a hitbox-adjusted number the same spell
+-- would read as reaching at "27 yd" on a big mob, contradicting the ticks.
+--
+-- UnitXP is still what keeps the window alive without ClassicAPI - it is the
+-- only Required source that resolves NPCs at all (SuperWoW's positions cover
+-- players only). It is a different metric, not a worse one; the calibration is
+-- keyed to the tag so the bands are always learned in whatever metric is live.
 function AR:Distance()
     if not UnitExists("target") then return nil end
 
-    -- UnitXP_SP3 first, because it is a REQUIRED dependency and it resolves NPCs.
-    -- That ordering is the whole reason this window works for every player rather
-    -- than only for ClassicAPI users: verified in game 2026-08-18, returning
-    -- 40.16 / 37.71 against a mob on a client with ClassicAPI removed.
-    if UnitXP then
-        local ok, d = pcall(UnitXP, "distanceBetween", "player", "target")
-        if ok and type(d) == "number" and d >= 0 then return d end
-    end
-    -- ClassicAPI's own call. Also covers NPCs; kept as the first fallback.
     if UnitDistanceSquared then
         local ok, d = pcall(UnitDistanceSquared, "target")
-        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d) end
+        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d), "c2c" end
+    end
+    if UnitXP then
+        local ok, d = pcall(UnitXP, "distanceBetween", "player", "target")
+        if ok and type(d) == "number" and d >= 0 then return d, "hb" end
     end
     -- SuperWoW positions last: measured to resolve for PLAYERS ONLY - every NPC
     -- target in a 40-minute capture came back nil - so it can never be the
     -- primary source for a window whose whole job is the distance to a mob.
+    -- Same geometry as UnitDistanceSquared where it does answer.
     if UnitPosition then
         local x1, y1, z1 = UnitPosition("player")
         local x2, y2, z2 = UnitPosition("target")
         if x1 and x2 then
             local dx, dy = x2 - x1, y2 - y1
             local dz = ((z1 and z2) and (z2 - z1)) or 0
-            return math.sqrt(dx * dx + dy * dy + dz * dz)
+            return math.sqrt(dx * dx + dy * dy + dz * dz), "c2c"
         end
     end
-    return nil
+    return nil, nil
 end
 
 function AR:Probe(which)
@@ -240,8 +273,8 @@ end
 --   ranged: a true reading widens the band; a false reading INSIDE the band
 --           means the band is too wide, so the nearer edge is pulled to here.
 -- Converges in a few seconds of walking and needs no state beyond the estimate.
-function AR:Calibrate(d, inMelee, inRanged)
-    local c = self:Cal()
+function AR:Calibrate(d, inMelee, inRanged, metric)
+    local c = self:Cal(metric)
     if not c or not d then return end
     if inMelee ~= nil then
         if inMelee then
@@ -432,7 +465,7 @@ function AR:OnTick()
         return
     end
 
-    local d = self:Distance()
+    local d, metric = self:Distance()
     f.dist:SetText(d and string.format("%.1f", d) .. " yd" or "?")
 
     -- Live verdicts. These are the authority for the colour; the zones below are
@@ -444,10 +477,10 @@ function AR:OnTick()
         local r = self:Probe("ranged")
         if m then inMelee = Aegis_SBR:SpellInRange(m, "target") end
         if r then inRanged = Aegis_SBR:SpellInRange(r, "target") end
-        if d then self:Calibrate(d, inMelee, inRanged) end
+        if d then self:Calibrate(d, inMelee, inRanged, metric) end
     end
 
-    local c = self:Cal() or { mMax = DEF_MELEE_MAX, rMin = DEF_RANGED_MIN, rMax = DEF_RANGED_MAX }
+    local c = self:Cal(metric) or { mMax = DEF_MELEE_MAX, rMin = DEF_RANGED_MIN, rMax = DEF_RANGED_MAX }
     local scaleMax = SCALE_DEFAULT
     if c.rMax and c.rMax + 5 > scaleMax then scaleMax = math.ceil((c.rMax + 5) / 10) * 10 end
     if self.scaleShown ~= scaleMax then

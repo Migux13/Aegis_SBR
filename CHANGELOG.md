@@ -92,12 +92,15 @@ nor ranged reaches is invisible in a text label. The band edges **calibrate them
 watching where the engine's own range verdict flips, because melee reach includes the target's
 hitbox and therefore differs per mob.
 
-The distance itself comes from **UnitXP_SP3**, which is required anyway — so the number and the
-marker are exact on every client, with or without ClassicAPI. That ordering had to be corrected
-before release: the first version led with SuperWoW's `UnitPosition`, which was then measured to
-resolve for *players only*, so the window showed "?" against every mob without ClassicAPI. A
-dead feature dressed up as a graceful degradation. ClassicAPI now sharpens only the band
-*edges*, which fall back to flat thresholds and say so with a trailing dot.
+There is always a real number, with or without ClassicAPI, because **UnitXP_SP3** is required
+anyway and resolves mobs. The source order took two corrections before release, both from play
+reports: leading with SuperWoW's `UnitPosition` showed `?` against every mob (it resolves for
+players only), and then leading with UnitXP silently changed the *metric* — it measures
+hitbox-adjusted where ClassicAPI measures centre-to-centre, so the number stopped matching the
+scale's own tick labels. Centre-to-centre wins, because that is the model the ticks and the
+client's spell ranges use. The learned edges are keyed to the metric and discarded if the
+source changes. ClassicAPI now sharpens only the band *edges*, which fall back to flat
+thresholds and say so with a trailing dot.
 
 ### ✨ Subtlety rogue — raid support
 

@@ -130,9 +130,12 @@ edges **calibrate themselves** by watching where the engine's own range verdict 
 melee reach includes the *target's* hitbox and so differs per mob: a large boss is reachable
 from further out than a small humanoid at the same distance.
 
-The **distance itself needs no ClassicAPI** — it comes from UnitXP_SP3, which is required
-anyway, so the number and the marker are exact on any client. ClassicAPI sharpens the *band
-edges*; without it they fall back to flat thresholds and say so with a trailing dot.
+The **distance itself needs no ClassicAPI** — UnitXP_SP3 is required anyway and resolves
+mobs, so there is always a real number. ClassicAPI sharpens the *band edges*; without it they
+fall back to flat thresholds and say so with a trailing dot. The two sources measure slightly
+differently (centre-to-centre versus hitbox-adjusted), so the learned edges are discarded
+automatically if the source ever changes, rather than leaving the marker drifting against
+bands learned in the other unit.
 
 ---
 
