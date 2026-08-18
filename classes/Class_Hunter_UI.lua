@@ -60,6 +60,12 @@ function M:BuildBody(ui, parent)
     self.tauntRow = L:Row{ key = "petTaunt", label = "Pet taunt", spell = "Growl", onToggle = set("petTaunt") }
     self.kcRow = L:Row{ key = "useKillCommand", label = "Kill Command", spell = "Kill Command", onToggle = set("useKillCommand") }
     self.baitedRow = L:Row{ key = "useBaitedShot", label = "Baited Shot on pet crit", spell = "Baited Shot", onToggle = set("useBaitedShot") }
+    -- A window, not a rotation setting, so it writes to the pet module directly
+    -- and lives per character rather than per profile - the same arrangement the
+    -- rogue's poison rows use for the shared upkeep module.
+    self.petWinRow = L:Row{ key = "petWindow", label = "Show pet window", onToggle = function(on)
+        if Aegis_SBR_Pet then Aegis_SBR_Pet:SetShown(on) end
+    end }
 
     L:Header("Cooldowns")
     self.cdRow = L:Row{ key = "popCDs", label = "Pop cooldowns", onToggle = set("popCDs") }
@@ -88,6 +94,7 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.manaAspRow.slider, "Viper below", "Drop to Aspect of the Viper when your mana falls under this percent.")
     ui:Tip(self.manaBackRow.slider, "Back to combat at", "Swap back to Aspect of the Hawk/Wolf once mana recovers to this percent. Set it above the 'Viper below' value.")
     ui:Tip(self.petRow.cb, "Pet attack", "Sends your pet onto the target each press.")
+    ui:Tip(self.petWinRow.cb, "Show pet window", "A small movable readout: level, experience toward the next level, and happiness, with the border coloured green, yellow or red so the state reaches you across the screen.", "All of it is in the default Pet Details panel too - the point is a window small enough to leave up. There is deliberately no countdown to the next loyalty level: the client exposes no progress within a level, and a measured one restarted at every zone line, because a zone change dismisses the pet for a moment and that looks exactly like a new level starting.")
     ui:Tip(self.mendRow.cb, "Mend Pet", "Heals the pet below the slider value (HoT, refreshed ~12s).")
     ui:Tip(self.mendRow.slider, "Mend Pet below", "Pet health percent under which Mend Pet is cast.")
     ui:Tip(self.kcRow.cb, "Kill Command", "Beast Mastery: fired on cooldown while in combat.")
@@ -131,6 +138,7 @@ function M:RefreshBody(ui, buf)
     ui:BindCheck(self.aspectRow, buf.useAspect)
     ui:BindCheck(self.manaAspRow, buf.useManaAspect)
     ui:BindCheck(self.petRow, buf.petAttack)
+    if Aegis_SBR_Pet then self.petWinRow.cb:SetChecked(Aegis_SBR_Pet:Enabled()) end
     ui:BindCheck(self.tauntRow, buf.petTaunt)
     ui:BindCheck(self.mendRow, buf.useMendPet)
     ui:BindCheck(self.kcRow, buf.useKillCommand)
