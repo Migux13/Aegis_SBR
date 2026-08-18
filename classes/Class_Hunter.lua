@@ -364,9 +364,40 @@ end
 -- registers. Without name resolution, `interval` is the blind reapply timer.
 -- ============================================================
 M.debuffThrottle = {}
+-- Debuffs where ANY hunter's copy is as good as ours, so the caster is
+-- irrelevant. Hunter's Mark does not stack and its attack-power bonus helps
+-- every attacker regardless of who applied it - re-marking over a raid mate's
+-- mark is pure waste. Lacerate and the stings are the opposite: they are our
+-- own damage and another hunter's copy says nothing about ours, so they are NOT
+-- listed here and stay owner-filtered.
+--
+-- RANK IS DELIBERATELY IGNORED (user decision, 2026-08-18). A higher-rank Mark
+-- does overwrite a lower one, so in a mixed-rank group re-marking could be an
+-- upgrade - but that can only happen while levelling, never at 60 where every
+-- hunter has the top rank. "Any Mark on the target is enough" is the rule; do
+-- not add rank comparison without being asked.
+local SHARED_DEBUFF = {
+    ["Hunter's Mark"] = true,
+}
+
+-- Is this debuff on the target, according to EITHER detection path?
+-- The old path (SuperWoW ids / icon fragment) answers "up or not"; ClassicAPI
+-- answers with a real expiry and, where it matters, a caster. Either saying yes
+-- is enough - both are positive evidence, and a miss on one is exactly the case
+-- the other exists to cover.
+function M:DebuffUpAny(name)
+    if self:TargetDebuffUp(name, STING_TEX[name]) then return true end
+    if not Aegis_SBR.TargetDebuffRemaining then return false end
+    if not SHARED_DEBUFF[name] and Aegis_SBR:TargetDebuffMine(name) == false then
+        return false                      -- someone else's, and ownership matters here
+    end
+    local remain = Aegis_SBR:TargetDebuffRemaining(name)
+    return (remain and remain > 0) and true or false
+end
+
 function M:MaintainDebuff(name, interval)
     if not self:KnowsSpell(name) then return false end
-    if self:TargetDebuffUp(name, STING_TEX[name]) then return false end
+    if self:DebuffUpAny(name) then return false end
     local id = self:TargetId()
     local rec = self.debuffThrottle[name]
     local now = GetTime()
@@ -395,6 +426,32 @@ function M:MaintainSting(name, interval)
         self:Later(function() self.stingSeen[name] = true end)
         return false
     end
+    -- ClassicAPI second opinion, and it may ONLY ever say "do not cast".
+    --
+    -- This direction matters and is the whole lesson of the 2026-08-18 Hunter
+    -- regression: the first attempt let ClassicAPI SHORTEN the retry throttle
+    -- while the check above still decided whether to cast. Whenever the two
+    -- detections disagreed the sting was re-queued every 1.5s, and since a sting
+    -- is a ranged shot through the Nampower queue, it clipped Auto Shot on every
+    -- press - the exact starvation this module's header warns about.
+    --
+    -- Read as an authority for "still on the target" instead, the change can
+    -- only ever SUPPRESS a cast, never add one, so it cannot starve the shot
+    -- timer no matter how the two paths disagree. It fixes the disagreement in
+    -- the right direction: a sting the old detection cannot read is no longer
+    -- re-applied on top of itself.
+    if Aegis_SBR.TargetDebuffRemaining then
+        local mine = Aegis_SBR:TargetDebuffMine(name)
+        -- mine == false is another hunter's sting and says nothing about ours.
+        -- mine == nil is "cannot tell" and is accepted, as elsewhere.
+        if mine ~= false then
+            local remain = Aegis_SBR:TargetDebuffRemaining(name)
+            if remain and remain > 0 then
+                self:Later(function() self.stingSeen[name] = true end)
+                return false
+            end
+        end
+    end
     local id = self:TargetId()
     local rec = self.debuffThrottle[name]
     local now = GetTime()
@@ -416,6 +473,17 @@ function M:MaintainSting(name, interval)
     if not self:Queue(name, "sting missing") then return false end
     self:Later(function() self.debuffThrottle[name] = { id = id, t = now } end)
     return true
+end
+
+-- Trace decoration: what ClassicAPI reports for this sting, or "" when it has
+-- nothing to say (absent, unknown timing, not our sting). Purely diagnostic -
+-- nothing reads this to make a decision.
+function M:StingRemainText(name)
+    if not Aegis_SBR.TargetDebuffRemaining then return "" end
+    if Aegis_SBR:TargetDebuffMine(name) == false then return "(other's)" end
+    local remain = Aegis_SBR:TargetDebuffRemaining(name)
+    if not remain then return "" end
+    return string.format("(%.1fs)", remain)
 end
 
 -- ============================================================
@@ -606,7 +674,7 @@ function M:Rotate(cfg)
     -- Strict opener gate: Serpent Sting may only follow a confirmed Hunter's Mark.
     -- (True when Mark is disabled or unlearned, so it never blocks at low level.)
     local markOK = (not cfg.useHuntersMark) or (not self:KnowsSpell("Hunter's Mark"))
-        or self:TargetDebuffUp("Hunter's Mark", STING_TEX["Hunter's Mark"])
+        or self:DebuffUpAny("Hunter's Mark")
     -- Effective range state. "auto" picks ranged vs melee by distance each press
     -- (so abilities only fire in the matching state); otherwise honor the choice.
     local melee
@@ -628,9 +696,13 @@ function M:Rotate(cfg)
                 .. (effectiveSting ~= cfg.sting and ("->" .. effectiveSting) or "")
                 .. (self:KnowsSpell(effectiveSting) and "" or "(unlearned)")
                 .. (self:StingImmuneNow() and "(immune)" or "")
-                .. (self:TargetDebuffUp(effectiveSting, STING_TEX[effectiveSting]) and "(up)" or "")) or "-")
+                .. (self:TargetDebuffUp(effectiveSting, STING_TEX[effectiveSting]) and "(up)" or "")
+                -- ClassicAPI's own reading, shown separately from "(up)" on
+                -- purpose: when the two disagree, that difference is the thing
+                -- worth seeing in a trace.
+                .. (self:StingRemainText(effectiveSting))) or "-")
             .. " inMelee=" .. (inMeleeNow and "Y" or "n")
-            .. " mark=" .. (cfg.useHuntersMark and (self:TargetDebuffUp("Hunter's Mark", STING_TEX["Hunter's Mark"]) and "Y" or "n") or "-")
+            .. " mark=" .. (cfg.useHuntersMark and (self:DebuffUpAny("Hunter's Mark") and "Y" or "n") or "-")
             .. " L&L=" .. (self:HasBuff("Lock and Load") and "Y" or "n")
             .. " auto=" .. (self:AutoShotting() and "Y" or (self.autoShotOn and "assumed" or "N"))
             .. " steady=" .. (cfg.useSteadyShot and (self:SteadyReady() and "ready" or "wait") .. "/" .. self:WeaveSource() or "-")

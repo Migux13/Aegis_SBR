@@ -10,6 +10,39 @@
 local M = Aegis_SBR.classes.ROGUE
 M.useScrollLayout = true
 
+-- Four tabs, because the three specs are played nothing like each other and a
+-- single flat list forced every rogue to read past two thirds of it. The rail
+-- itself is the shared one (Aegis_SBR_UI:BuildSpecTabs); a class only declares
+-- the tabs and tags its sections.
+--
+-- IMPORTANT: these tabs are a VIEW. Switching one changes what is on screen and
+-- nothing else - the rotation does not read cfg.spec, so a setting you turned on
+-- stays on while a tab does not show it. That is deliberate: a tab that silently
+-- disabled options would be a second, invisible set of switches. The Starter tab
+-- is safe under that rule because everything it hides is either off by default or
+-- a spell a rogue under twenty cannot cast yet.
+M.specTabs = {
+    field = "spec", default = "assassination",
+    tabs = {
+        { key = "starter", label = "Starter",
+          tip1 = "The first twenty levels, and nothing else.",
+          tip2 = "One builder, Slice and Dice, Eviscerate. Everything the other tabs carry is a talent, a poison or a spell you do not have yet - hidden here rather than explained.",
+          sub = "The first twenty levels: a builder, Slice and Dice, Eviscerate." },
+        { key = "assassination", label = "Assassin",
+          tip1 = "Poison and bleed.",
+          tip2 = "Envenom and Rupture are maintained buffs; the combo points above the ceiling go into Eviscerate. This is the spec the rotation was measured on.",
+          sub = "Envenom and Rupture as maintained buffs, Eviscerate takes the surplus." },
+        { key = "combat", label = "Combat",
+          tip1 = "Sustained damage, with reactions.",
+          tip2 = "Riposte and Surprise Attack fire inside the windows the target opens; Adrenaline Rush and Blade Flurry carry the burst.",
+          sub = "Riposte and Surprise Attack react to the target; cooldowns carry the burst." },
+        { key = "subtlety", label = "Subtlety",
+          tip1 = "Bleeds, amplified.",
+          tip2 = "Hemorrhage raises every bleed on the target, the group's included. Expose Armor and Mark for Death are worth more to the raid than to you, and the rotation puts them ahead of your own finishers for that reason.",
+          sub = "Expose Armor and Mark for Death serve the raid; they run ahead of your own finishers." },
+    },
+}
+
 -- ============================================================
 -- build body (rogue controls)
 -- ============================================================
@@ -34,14 +67,40 @@ function M:BuildBody(ui, parent)
     -- rides on top of whichever builder is chosen rather than replacing it.
     -- Riposte joins them because it is likewise something you press when no
     -- finisher is due - it neither spends nor builds combo points.
+    -- Untagged: every tab needs a builder, the starter included.
     L:Header("Attacks")
     self.builderDD = L:Dropdown("builder", "Builder", 170, set("builder"))
+
+    -- Both are Combat talents and both are REACTIONS - the target opens a window
+    -- and the press has to land inside it. They sit together for that reason, not
+    -- because they do the same thing.
+    L:Header("Reactions", "combat")
     self.saRow = L:Row{ key = "useSurpriseAttack", label = "Surprise Attack", spell = "Surprise Attack", onToggle = set("useSurpriseAttack") }
     self.ripRow = L:Row{ key = "useRiposte", label = "Riposte", spell = "Riposte", onToggle = set("useRiposte") }
 
+    -- The three Subtlety talents plus the cooldown that hands two of them back.
+    -- They sit above the shared finishers on purpose: two of the four are worth
+    -- more to the group than to the rogue, and reading them first is how the tab
+    -- says that.
+    L:Header("Subtlety", "subtlety")
+    self.eaRow = L:Row{ key = "useExposeArmor", label = "Expose Armor from", spell = "Expose Armor", onToggle = set("useExposeArmor"),
+        slider = { key = "exposeCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("exposeCP") } }
+    self.sodRow = L:Row{ key = "useShadowOfDeath", label = "Shadow of Death from", spell = "Shadow of Death", onToggle = set("useShadowOfDeath"),
+        slider = { key = "sodCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("sodCP") } }
+    self.markRow = L:Row{ key = "useMark", label = "Mark for Death up to", spell = "Mark for Death", onToggle = set("useMark"),
+        slider = { key = "markMaxCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("markMaxCP") } }
+    self.prepRow = L:Row{ key = "usePreparation", label = "Preparation", spell = "Preparation", onToggle = set("usePreparation") }
+    self.gsRow = L:Row{ key = "useGhostly", label = "Ghostly Strike on cooldown", spell = "Ghostly Strike", onToggle = set("useGhostly") }
+
+    -- Slice and Dice is the one upkeep a level 10 rogue already has, so it stays
+    -- untagged while its tuning does not.
     L:Header("Buffs")
     self.sndRow = L:Row{ key = "useSnd", label = "Slice and Dice", spell = "Slice and Dice", onToggle = set("useSnd") }
+
+    L:Header("Envenom", "assassination")
     self.envRow = L:Row{ key = "useEnvenom", label = "Envenom", spell = "Envenom", onToggle = set("useEnvenom") }
+
+    L:Header("Buff timing", { assassination = true, combat = true, subtlety = true })
     self.renewRow = L:Row{ label = "Refresh when under",
         slider = { key = "buffRenew", min = 0, max = 2, step = 1, suffix = "s", onChange = set("buffRenew") } }
     -- Highest combo point count a refresh may spend. 5 = no ceiling (unchanged
@@ -52,22 +111,25 @@ function M:BuildBody(ui, parent)
     self.refreshMaxRow = L:Row{ label = "Spend at most",
         slider = { key = "refreshMaxCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("refreshMaxCP") } }
 
+    -- Untagged: "how many points before I finish" is the whole rotation at low
+    -- level. The reservation switch moved down into Execute, where the phase it
+    -- refers to actually lives.
     L:Header("Eviscerate")
     self.cpRow = L:Row{ label = "Use from",
         slider = { key = "cpFinish", min = 1, max = 5, step = 1, suffix = "", onChange = set("cpFinish") } }
-    self.evisOnlyRow = L:Row{ key = "evisExecuteOnly", label = "Only in execute phase", onToggle = set("evisExecuteOnly") }
 
     -- Rupture keeps a section of its own rather than sitting with the two buffs
     -- above: the ceiling there does not apply to it, and putting them together
     -- would imply it does. Its threshold is a floor, theirs is a ceiling.
-    L:Header("Rupture")
+    L:Header("Rupture", { assassination = true, combat = true, subtlety = true })
     self.rupRow = L:Row{ key = "useRupture", label = "Enable from", spell = "Rupture", onToggle = set("useRupture"),
         slider = { key = "ruptureCP", min = 1, max = 5, step = 1, suffix = "", onChange = set("ruptureCP") } }
 
     -- Execute is a PHASE with three conditions, not three features. Under one
     -- header they read as what they are: when it starts, what it may spend, and
     -- when it is called off again.
-    L:Header("Execute")
+    L:Header("Execute", { assassination = true, combat = true, subtlety = true })
+    self.evisOnlyRow = L:Row{ key = "evisExecuteOnly", label = "Eviscerate only in this phase", onToggle = set("evisExecuteOnly") }
     self.execRow = L:Row{ key = "useExecute", label = "Enable below", onToggle = set("useExecute"),
         slider = { key = "executeHpPct", min = 1, max = 30, step = 1, suffix = "%", onChange = set("executeHpPct") } }
     -- Lowest combo point count the execute dump may spend. 1 = unchanged.
@@ -79,7 +141,7 @@ function M:BuildBody(ui, parent)
     self.execTTKRow = L:Row{ label = "Skip if alive past",
         slider = { key = "executeTTK", min = 0, max = 8, step = 1, suffix = "s", onChange = set("executeTTK") } }
 
-    L:Header("Cooldowns")
+    L:Header("Cooldowns", { assassination = true, combat = true, subtlety = true })
     self.cbRow = L:Row{ key = "useColdBlood", label = "Cold Blood with Eviscerate", spell = "Cold Blood", onToggle = set("useColdBlood") }
     self.cdRow = L:Row{ key = "popCDs", label = "Pop cooldowns", onToggle = set("popCDs") }
     self.cdEliteRow = L:Row{ key = "autoCDElite", label = "Auto on elite", onToggle = set("autoCDElite") }
@@ -88,7 +150,7 @@ function M:BuildBody(ui, parent)
     -- shared Aegis_SBR_BuffUp module (global per character, not per profile), so
     -- their toggles write there directly. The pre-pull reminder stays a
     -- per-profile setting. Presets open a text dialog on click.
-    L:Header("Poisons")
+    L:Header("Poisons", { assassination = true, combat = true, subtlety = true })
     local function abu(fn) return function(v) if Aegis_SBR_BuffUp then Aegis_SBR_BuffUp[fn](Aegis_SBR_BuffUp, v) end end end
     self.pcRow  = L:Row{ key = "abuPoisonControl", label = "Poison control (Quick Bar + rebuff)", onToggle = abu("SetPoisonControl") }
     self.pmhRow = L:Row{ key = "abuWatchMH", label = "Rebuff button: mainhand", onToggle = abu("SetWatchPoisonMH") }
@@ -132,6 +194,14 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.execTTKRow.slider, "Skip if alive past", "Cancels the execute dump when the target is measurably going to live longer than this, so an elite parked at low health does not collect weak finishers.", "A brake only - it can never start the execute phase, which is what the health percentage above is for. Only cancels below the Eviscerate threshold, so a full-value finisher is never held back. The estimate is rough (it was wrong more often than right in testing), which is why it may only ever take the phase away, never grant it.")
     ui:Tip(self.cdRow.cb, "Pop cooldowns", "Use Adrenaline Rush and Blade Flurry every press (off the global cooldown).")
     ui:Tip(self.cdEliteRow.cb, "Auto on elite", "Pop the cooldowns only against elite and boss targets.")
+    ui:Tip(self.eaRow.cb, "Expose Armor", "Kept on the target: re-applied whenever the debuff is gone. With Improved Expose Armor it reduces MORE armor than Sunder Armor, so it replaces the warrior's stack instead of competing with it, and every physical attacker on the target gains.", "It runs ahead of every other finisher, which means five combo points every thirty seconds do not go into Shadow of Death or Eviscerate. That is the trade, and it is paid for the group. There is no early refresh: a target debuff carries no readable time left on this client, so it can only be renewed once it has actually dropped.")
+    ui:Tip(self.eaRow.slider, "Expose Armor at CP", "Combo points required before the debuff is applied. Its strength scales with the points spent, so anything below 5 puts up a weaker reduction than the warrior's Sunder it is meant to replace.")
+    ui:Tip(self.sodRow.cb, "Shadow of Death", "A sigil on the target for 6 seconds that banks a share of ALL damage the target takes, then releases it as physical damage. One minute cooldown.", "It sits above Slice and Dice, Envenom and Eviscerate because those can be refreshed on any press while a missed sigil window is simply gone. Its value comes from outside you - the more the group is hitting the target during those six seconds, the more it stores.")
+    ui:Tip(self.sodRow.slider, "Shadow of Death at CP", "Both the share banked and its cap scale per combo point: 1 point banks 10% up to 50% of your attack power, 5 points bank 50% up to 250%.", "5 is not a preference here. A 1-point sigil caps at a fifth of a full one, and the ability is on the same one minute cooldown either way.")
+    ui:Tip(self.markRow.cb, "Mark for Death", "135% weapon damage that awards TWO combo points and cannot be dodged, blocked or parried, plus 30% attack power for the whole party for 8 seconds. Three minute cooldown.", "It is a builder, not a finisher - which is why it goes out ahead of your normal builder rather than waiting for combo points. The 8 second window is what Shadow of Death is meant to be fired into.")
+    ui:Tip(self.markRow.slider, "Mark up to CP", "Highest combo point count it may be used at. Above this the two points it awards would run into the cap and be thrown away.", "Only matters after Preparation, which hands the cooldown back early enough to catch you at high combo points.")
+    ui:Tip(self.prepRow.cb, "Preparation", "Clears the cooldown on your other rogue abilities. Used only when Mark for Death AND Shadow of Death are both actually on cooldown, so the seven minutes buy back three plus one.", "It also waits for a press with no finisher due, since it applies nothing and deals no damage itself.")
+    ui:Tip(self.gsRow.cb, "Ghostly Strike on cooldown", "Takes the place of your normal builder whenever its 20 second cooldown is up: same 40 energy, same single combo point, but 125% weapon damage instead of Hemorrhage's 110% - and 15% dodge for 7 seconds on top.", "It is not in the Builder list above on purpose. That list is what you spam, and an ability on a 20 second cooldown picked there would fail four presses out of five.")
     ui:Tip(self.pcRow.cb, "Poison control", "Master switch for the poison Quick Bar and rebuff buttons (also in the minimap right-click menu). Applies to this character across all rogue profiles.", "Applying a poison needs a real click, so it is always button-driven, never cast from the rotation macro.")
     ui:Tip(self.pmhRow.cb, "Rebuff button: mainhand", "Show a click-to-apply button when the mainhand poison has fallen off.")
     ui:Tip(self.pohRow.cb, "Rebuff button: offhand", "Show a click-to-apply button when the offhand poison has fallen off.")
@@ -162,6 +232,29 @@ function M:RefreshBody(ui, buf)
     ui:BindCheck(self.ripRow, buf.useRiposte)
     ui:BindCheck(self.saRow, buf.useSurpriseAttack)
     ui:BindCheck(self.cbRow, buf.useColdBlood)
+
+    -- Subtlety. Two floors and one ceiling, so the value column has to say which
+    -- is which - the same rule the rest of this window follows.
+    ui:BindCheck(self.eaRow, buf.useExposeArmor)
+    local eav = buf.exposeCP or 5
+    self.eaRow.slider:SetValue(eav)
+    if self.eaRow.slider.valText then self.eaRow.slider.valText:SetText(">=" .. eav) end
+    ui:SliderEnable(self.eaRow.slider, buf.useExposeArmor and true or false)
+
+    ui:BindCheck(self.sodRow, buf.useShadowOfDeath)
+    local sodv = buf.sodCP or 5
+    self.sodRow.slider:SetValue(sodv)
+    if self.sodRow.slider.valText then self.sodRow.slider.valText:SetText(">=" .. sodv) end
+    ui:SliderEnable(self.sodRow.slider, buf.useShadowOfDeath and true or false)
+
+    ui:BindCheck(self.markRow, buf.useMark)
+    local mkv = buf.markMaxCP or 3
+    self.markRow.slider:SetValue(mkv)
+    if self.markRow.slider.valText then self.markRow.slider.valText:SetText("<=" .. mkv) end
+    ui:SliderEnable(self.markRow.slider, buf.useMark and true or false)
+
+    ui:BindCheck(self.prepRow, buf.usePreparation)
+    ui:BindCheck(self.gsRow, buf.useGhostly)
     ui:BindCheck(self.cdRow, buf.popCDs)
     ui:BindCheck(self.cdEliteRow, buf.autoCDElite)
 

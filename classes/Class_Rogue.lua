@@ -45,6 +45,12 @@ local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
 -- the spell tooltip shows only the BASE duration - so a talented rogue's Slice
 -- and Dice really lasts 13.05-30.45s, not the 9-21s the tooltip implies.
 local TALENT_TASTE = "Taste for Blood"
+-- Expose Armor is only worth five combo points WITH this talent, which is what
+-- makes it beat the warrior's Sunder stack instead of duplicating it. Reported
+-- from play (2026-08-18): without it, drop Expose Armor from the rotation
+-- entirely rather than paying a finisher's worth of points every 30s for a
+-- redundant debuff.
+local TALENT_IEA = "Improved Expose Armor"
 -- Default renew window: seconds of remaining buff time at or below which Slice
 -- and Dice / Envenom are re-applied. Overridable per profile via cfg.buffRenew.
 -- This used to be 5, sized for the era when the remaining time was ESTIMATED
@@ -69,6 +75,10 @@ local BUFF_RENEW = 1
 local TFB_RENEW = 10
 
 -- Builder universe, used by the UI to offer only learned ones
+-- Deliberately WITHOUT Ghostly Strike. This list answers "which builder do you
+-- spam", and Ghostly Strike has a 20 second cooldown - picked here, four presses
+-- out of five would simply fail. It rides on top of the chosen builder instead
+-- (see the cooldown override in Decide).
 M.BUILDERS = { "Sinister Strike", "Backstab", "Hemorrhage", "Noxious Assault", "Mutilate" }
 
 M.templates = {
@@ -108,6 +118,13 @@ M.builderAlias = {
 -- Fills any missing field with a default
 function M:NormalizeProfile(c)
     if c.builder == nil then c.builder = "" end
+    -- Which spec's settings the config window shows for this profile. It is a
+    -- VIEW, not a mode: the rotation does not branch on it, so anything you
+    -- switched on stays on even while a tab does not show it. Written here so a
+    -- profile made before the tabs existed opens on a sensible one - existing
+    -- profiles are Assassination, which is the only spec either maintainer has
+    -- actually played.
+    if c.spec == nil then c.spec = "assassination" end
     if c.useSnd == nil then c.useSnd = true end
     if c.useEnvenom == nil then c.useEnvenom = false end
     if c.useRupture == nil then c.useRupture = false end
@@ -126,7 +143,19 @@ function M:NormalizeProfile(c)
     -- surplus goes into Eviscerate first and the buff is refreshed on the next
     -- press with the point Ruthlessness hands back. 5 = no ceiling, which is
     -- what the rotation always did.
-    if c.refreshMaxCP == nil then c.refreshMaxCP = 5 end
+    --
+    -- Subtlety defaults to 1 instead, because that IS its rotation rather than a
+    -- tuning preference: 5-CP finishers with a 1-CP Slice and Dice refresh in
+    -- between, off the point Ruthlessness hands straight back (play report,
+    -- 2026-08-18). Assassination keeps 5 - v1.1.8 measured 1 as right for short
+    -- dungeon fights and wrong in a raid, where the buff runs its full length.
+    --
+    -- c.spec is settled at the top of this function, so reading it here is safe.
+    -- It has to happen HERE and not further down with the other Subtlety fields:
+    -- by then the field is no longer nil and an override would never fire.
+    if c.refreshMaxCP == nil then
+        c.refreshMaxCP = (c.spec == "subtlety") and 1 or 5
+    end
     -- Retired: a combo point FLOOR for refreshes. Measured over 1355 presses it
     -- pushed Envenom uptime from 84% down to 61% and pinned the rotation at
     -- 2 combo points, because reaching the floor costs a builder GCD during
@@ -155,6 +184,42 @@ function M:NormalizeProfile(c)
     if c.buffRenew == nil then c.buffRenew = BUFF_RENEW end
     -- Cold Blood: opt-in. Rides along with Eviscerate only (see ColdBloodReady).
     if c.useColdBlood == nil then c.useColdBlood = false end
+    -- ------------------------------------------------------------
+    -- Subtlety. All four default ON for a Subtlety profile and OFF for every
+    -- other, which is why they are read after c.spec is settled above: they are
+    -- that tree's talents, so a Subtlety rogue wants them and nobody else can
+    -- cast them anyway. An existing profile switched to the Subtlety tab keeps
+    -- whatever it had - the fields are no longer nil by then - and the tab shows
+    -- all four so they can be turned on deliberately.
+    local sub = (c.spec == "subtlety")
+    -- Expose Armor is upkeep, not a one-off. With Improved Expose Armor it is a
+    -- STRONGER armor reduction than Sunder Armor rather than a redundant one, so
+    -- it overrides the warrior's stack instead of competing with it - which is
+    -- what makes it worth five combo points every time it drops. Those points
+    -- are gone from Shadow of Death and Eviscerate: that is the trade, and it is
+    -- paid for the raid, not for your own damage meter.
+    if c.useExposeArmor == nil then c.useExposeArmor = sub end
+    if c.exposeCP == nil then c.exposeCP = 5 end
+    -- Shadow of Death stores a share of ALL damage the target takes for six
+    -- seconds and releases it, both the share and the cap scaling per combo
+    -- point (5 points = 50% of damage taken, up to 250% attack power). Five
+    -- points is not a preference, it is the whole ability - a 1-point sigil caps
+    -- at a fifth of that.
+    if c.useShadowOfDeath == nil then c.useShadowOfDeath = sub end
+    if c.sodCP == nil then c.sodCP = 5 end
+    -- Mark for Death AWARDS two combo points, so it is a builder that happens to
+    -- buff the party, not a finisher. Cast above this many points and the two it
+    -- gives are thrown away against the cap.
+    if c.useMark == nil then c.useMark = sub end
+    if c.markMaxCP == nil then c.markMaxCP = 3 end
+    -- Preparation clears the other rogue cooldowns; here it exists to hand back
+    -- Mark for Death and Shadow of Death, so it only fires when both are down.
+    if c.usePreparation == nil then c.usePreparation = sub end
+    -- Ghostly Strike: same 40 energy and same single combo point as Hemorrhage,
+    -- but 125% weapon damage against 110%. On its 20 second cooldown it is
+    -- simply the better press, which is all the "hemo and ghostly" in the
+    -- described rotation ever was - a cooldown coming back, not an alternation.
+    if c.useGhostly == nil then c.useGhostly = sub end
     if c.popCDs == nil then c.popCDs = false end
     if c.autoCDElite == nil then c.autoCDElite = false end
     -- old keys from any earlier format are dropped silently
@@ -261,6 +326,80 @@ function M:ColdBloodReady(cfg, cp)
 end
 
 
+-- ============================================================
+-- Subtlety.
+--
+-- Three abilities the other two trees do not have, and one shared cooldown.
+-- Every one of them is gated on KnowsSpell as well as on its switch, so a
+-- profile carrying them does nothing surprising on a rogue who has not trained
+-- the talent.
+-- ============================================================
+
+-- Expose Armor is due when it is simply not on the target.
+--
+-- There is no better test available: a target debuff carries no readable time
+-- left on this client (the core's snapshot resolves NAMES and stacks, nothing
+-- more), so the refresh necessarily lands after it has dropped rather than
+-- before. One global cooldown of gap every thirty seconds on an armor debuff is
+-- a price worth paying for a check that cannot be wrong.
+--
+-- The throttle behind it is a safety net, not a timer. Without SuperWoW the
+-- debuff may be unreadable altogether, and "not up" would then be true on every
+-- single press - which would spend every combo point the rogue ever earns on
+-- re-applying a debuff that was already there. The stamp is written by Rotate,
+-- never by Decide, which must stay free of side effects.
+local EXPOSE_RETRY = 25
+function M:ExposeDue(cfg)
+    if not cfg.useExposeArmor then return false end
+    if not self:KnowsSpell("Expose Armor") then return false end
+    -- Without Improved Expose Armor the debuff only matches the warrior's Sunder
+    -- stack instead of beating it, so five combo points every 30s buy nothing the
+    -- raid did not already have. Suppress-only: this can stop a cast, never add
+    -- one, so it cannot starve anything the way a widened gate could.
+    if self:TalentRank(TALENT_IEA) < 1 then return false end
+    if self:TargetDebuffUp("Expose Armor", "Ability_Warrior_Riposte") then return false end
+    if self.exposeT and self.exposeId and self.exposeId == self:TargetId()
+        and (GetTime() - self.exposeT) < EXPOSE_RETRY then
+        return false
+    end
+    return true
+end
+
+-- Mark for Death: off cooldown, and not already running.
+--
+-- The cooldown alone would normally be enough - three minutes is far longer
+-- than the eight second buff - but Preparation resets it, and re-casting into
+-- the buff that is still up would throw the reset away. That is exactly what
+-- the player who described this rotation meant by "wait for previous Mark to
+-- end to do it again".
+function M:MarkReady(cfg, cp)
+    if not cfg.useMark then return false end
+    if not self:KnowsSpell("Mark for Death") then return false end
+    if not self:OwnCDReady("Mark for Death") then return false end
+    if cp > (cfg.markMaxCP or 3) then return false end
+    if self:BuffTime("Mark for Death") > 0 then return false end
+    return true
+end
+
+-- Preparation only when it actually buys something back. Both of its targets
+-- are down = the seven minute cooldown returns a three minute one and a one
+-- minute one; either alone is not worth it.
+function M:PreparationReady(cfg)
+    if not cfg.usePreparation then return false end
+    if not self:KnowsSpell("Preparation") then return false end
+    if not self:OwnCDReady("Preparation") then return false end
+    local want = false
+    if cfg.useMark and self:KnowsSpell("Mark for Death") then
+        if self:OwnCDReady("Mark for Death") then return false end
+        want = true
+    end
+    if cfg.useShadowOfDeath and self:KnowsSpell("Shadow of Death") then
+        if self:OwnCDReady("Shadow of Death") then return false end
+        want = true
+    end
+    return want
+end
+
 -- Spend the surplus before refreshing a buff.
 --
 -- Slice and Dice and Envenom have fixed potency; only their DURATION scales
@@ -364,7 +503,19 @@ function M:Decide(cfg, tracing)
 
     local builder = cfg.builder
     if builder == "" then
-        builder = self:KnowsSpell("Noxious Assault") and "Noxious Assault" or "Sinister Strike"
+        -- Both alternatives are talents, so knowing one says which tree was
+        -- spent in: Noxious Assault means Assassination, Hemorrhage means at
+        -- least ten points in Subtlety. Sinister Strike is what is left.
+        if self:KnowsSpell("Noxious Assault") then builder = "Noxious Assault"
+        elseif self:KnowsSpell("Hemorrhage") then builder = "Hemorrhage"
+        else builder = "Sinister Strike" end
+    end
+    -- Ghostly Strike replaces the builder for this press whenever it is off
+    -- cooldown: more damage for the same energy and the same combo point. It
+    -- overrides rather than queues, because a builder press is exactly what it
+    -- is worth - it is not worth a finisher's slot.
+    if cfg.useGhostly and self:KnowsSpell("Ghostly Strike") and self:OwnCDReady("Ghostly Strike") then
+        builder = "Ghostly Strike"
     end
     local useSnd = cfg.useSnd and self:KnowsSpell("Slice and Dice")
     local useEnv = cfg.useEnvenom and self:KnowsSpell("Envenom")
@@ -426,7 +577,15 @@ function M:Decide(cfg, tracing)
             .. " dump=" .. (self:DumpTarget(cfg, cp) or "-")
             .. " cb=" .. (cfg.useColdBlood and (self:KnowsSpell("Cold Blood")
                 and (self:OwnCDReady("Cold Blood") and "rdy" or "cd") or "?") or "-")
-            .. " elite=" .. (isElite and "Y" or "N"),
+            .. " elite=" .. (isElite and "Y" or "N")
+            .. (cfg.useExposeArmor and (" ea=" .. (self:ExposeDue(cfg) and "due" or "up")) or "")
+            .. (cfg.useShadowOfDeath and (" sod=" .. (self:KnowsSpell("Shadow of Death")
+                and (self:OwnCDReady("Shadow of Death") and "rdy" or "cd") or "?")) or "")
+            .. (cfg.useMark and (" mark=" .. (self:KnowsSpell("Mark for Death")
+                and (self:OwnCDReady("Mark for Death") and "rdy" or "cd") or "?")) or "")
+            .. (cfg.usePreparation and (" prep=" .. (self:PreparationReady(cfg) and "Y" or "N")) or "")
+            .. (cfg.useGhostly and (" gs=" .. (self:KnowsSpell("Ghostly Strike")
+                and (self:OwnCDReady("Ghostly Strike") and "rdy" or "cd") or "?")) or ""),
             -- Rogue never downranks (all ranks cost the same energy), so every
             -- cast below is a bare CastSpellByName(name) - vanilla resolves
             -- that to the highest known rank on its own. This line just
@@ -454,6 +613,16 @@ function M:Decide(cfg, tracing)
         return plan("Surprise Attack", "dodge window open", extras)
     end
 
+    -- P1c Mark for Death, above the builder because it IS a better builder:
+    -- 135% weapon damage, two combo points, and it cannot be dodged, blocked or
+    -- parried - plus 30% attack power for the whole party for eight seconds.
+    -- Nothing a normal builder does competes with that, so it never waits its
+    -- turn. Its own gate keeps it off the press when the two points it awards
+    -- would run into the cap.
+    if self:MarkReady(cfg, cp) and Aegis_SBR:CanAfford("Mark for Death") then
+        return plan("Mark for Death", "party cooldown, " .. cp .. " CP", extras)
+    end
+
     -- P2 no combo points, build (prevents an empty finisher)
     if cp == 0 then
         return plan(builder, "no combo points", extras)
@@ -477,6 +646,44 @@ function M:Decide(cfg, tracing)
     if execute then
         return self:FinisherPlan(cfg, cp, "Eviscerate",
             "execute, target at " .. string.format("%.0f%%", self:TargetHPPct()), extras)
+    end
+
+    -- P2b Expose Armor, ahead of every other finisher.
+    --
+    -- It is the only one that serves the RAID rather than this rogue: with
+    -- Improved Expose Armor it reduces more armor than Sunder Armor does, so it
+    -- replaces the warrior's stack rather than duplicating it, and every
+    -- physical attacker on the target gains from it. That is worth more than the
+    -- Eviscerate the same five points would have bought, which is precisely why
+    -- it outranks them - a Subtlety rogue is not a damage meter entry.
+    --
+    -- Short of energy it POOLS rather than falling through. Falling through
+    -- would hand the points to Rupture or Eviscerate, and the debuff would then
+    -- have to wait for a fresh five - which on a thirty second refresh means it
+    -- is simply down.
+    if self:ExposeDue(cfg) and cp >= (cfg.exposeCP or 5) then
+        if not Aegis_SBR:CanAfford("Expose Armor") then
+            return plan(nil, "pooling energy for Expose Armor, " .. cp .. " CP", extras)
+        end
+        return plan("Expose Armor", "armor debuff missing, " .. cp .. " CP", extras)
+    end
+
+    -- P2c Shadow of Death, above the maintained buffs.
+    --
+    -- One minute of cooldown against buffs that can be refreshed on any press:
+    -- a missed sigil window is gone, a refresh is merely late. And it is the one
+    -- finisher whose value comes from OUTSIDE the rogue - it banks a share of
+    -- all damage the target takes over six seconds - so it wants to go out while
+    -- the target is being hit by everyone, which is exactly the moment the party
+    -- buff from Mark for Death has just started.
+    --
+    -- Pools for the same reason Expose Armor does: the points are the ability.
+    if cfg.useShadowOfDeath and self:KnowsSpell("Shadow of Death")
+        and self:OwnCDReady("Shadow of Death") and cp >= (cfg.sodCP or 5) then
+        if not Aegis_SBR:CanAfford("Shadow of Death") then
+            return plan(nil, "pooling energy for Shadow of Death, " .. cp .. " CP", extras)
+        end
+        return plan("Shadow of Death", "sigil, " .. cp .. " CP", extras)
     end
 
     -- P3 Rupture, at its OWN combo-point threshold. It goes first among the
@@ -521,12 +728,30 @@ function M:Decide(cfg, tracing)
         return self:FinisherPlan(cfg, cp, "Eviscerate", cp .. " CP, buffs healthy", extras)
     end
 
+    -- P6b Preparation. Last, because it deals no damage and applies nothing:
+    -- it is only ever worth a press when there is no finisher due, and its own
+    -- gate already insists that both Mark for Death and Shadow of Death are
+    -- actually on cooldown, so the seven minutes buy back three plus one.
+    if self:PreparationReady(cfg) then
+        return plan("Preparation", "resetting Mark and the sigil", extras)
+    end
+
     -- P7 otherwise build
     return plan(builder, "building to " .. cpEvis .. " CP", extras)
 end
 
 function M:Rotate(cfg)
-    Aegis_SBR:Perform(self, self:Decide(cfg, true))
+    local p = self:Decide(cfg, true)
+    Aegis_SBR:Perform(self, p)
+    -- Expose Armor has neither a cooldown to read nor a readable duration on the
+    -- target, so the one thing that stops it re-firing on a client that cannot
+    -- see the debuff is remembering the attempt. Written HERE and not in Decide:
+    -- Decide is asked four times a second by the preview window and must not
+    -- change anything.
+    if p and p.spell == "Expose Armor" then
+        self.exposeT = GetTime()
+        self.exposeId = self:TargetId()
+    end
 end
 
 -- ============================================================

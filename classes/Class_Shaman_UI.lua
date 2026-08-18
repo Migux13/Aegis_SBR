@@ -242,7 +242,11 @@ function M:RefreshBody(ui, buf)
         ui:SetDropdown(dd, opts, cur, shown, c)
     end
     local waterOpts = { { label = "Mana Spring Totem", value = "manaspring" }, { label = "Healing Stream Totem", value = "healingstream" }, { label = "(none)", value = "none" } }
-    local earthOpts = { { label = "Strength of Earth Totem", value = "strength" }, { label = "Stoneskin Totem", value = "stoneskin" }, { label = "Tremor Totem", value = "tremor" }, { label = "(none)", value = "none" } }
+    -- Stoneclaw sits last before "(none)" and carries the warning in its label:
+    -- it TAUNTS, so on upkeep it pulls mobs off the tank every re-drop. Offered
+    -- because that is the player's decision, but it must not be pickable by
+    -- accident from the middle of the list.
+    local earthOpts = { { label = "Strength of Earth Totem", value = "strength" }, { label = "Stoneskin Totem", value = "stoneskin" }, { label = "Tremor Totem", value = "tremor" }, { label = "Stoneclaw Totem (taunts)", value = "stoneclaw" }, { label = "(none)", value = "none" } }
     local fireOpts  = { { label = "Searing Totem", value = "searing" }, { label = "Magma Totem", value = "magma" }, { label = "Fire Nova Totem", value = "firenova" }, { label = "Flametongue Totem", value = "flametongue" }, { label = "(none)", value = "none" } }
     local airOpts   = { { label = "Windfury Totem", value = "windfury" }, { label = "Grace of Air Totem", value = "graceofair" }, { label = "Nature Resistance Totem", value = "natureresist" }, { label = "Grounding Totem", value = "grounding" }, { label = "Windwall Totem", value = "windwall" }, { label = "(none)", value = "none" } }
     totemDD(self.waterDD, waterOpts, buf.totemWater, self.WATER_TOTEMS, "manaspring")

@@ -4,6 +4,133 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.1.9 — ClassicAPI support, a range window, and a Subtlety rogue
+
+**Two strands.** The first makes Aegis use **ClassicAPI** where it is installed, for the three
+things a 1.12 client genuinely cannot do. The second adds a **Subtlety** rogue path, which is
+written from research and has **not been played** — see its warning below.
+
+Everything ClassicAPI-related is optional. Without the DLL, every path falls back to exactly
+the previous behaviour; that is a contract, not a courtesy, and `/sbr capi` reports what was
+actually found.
+
+### ✨ Enemy debuff timers, with a caster
+
+1.12 tells an addon that a debuff is *there* and how many stacks it has — never how long it
+has left, and never whose it is. Aegis worked around that everywhere: the Warlock inferred DoT
+time from its own cast bookkeeping, the Hunter re-applied stings on a blind interval, the
+Shaman re-shocked on a blind 12s clock.
+
+With ClassicAPI the real expiry is available, and it is the **caster-modified** one. Measured
+in game: Rupture at 5 combo points reads **22s**, not the tooltip's 16 — because Turtle's
+*Taste for Blood* adds 6s, which no client-side arithmetic could have known. The Warlock's DoT
+durations came back matching the module's own model to the decimal (Corruption 16.9, Curse of
+Agony 22.6, Siphon Life 28.2 at *Rapid Deterioration* rank 2), so the estimate was right — but
+it no longer depends on bookkeeping that goes stale on a target swap or an outside refresh.
+
+The caster matters as much as the clock: in a group, another warlock's *Corruption* used to
+read as yours. It doesn't now.
+
+### 🐛 Fixed — the Hunter stopped shooting (found and fixed during this release)
+
+The first attempt let ClassicAPI *shorten* the sting retry interval while the old detection
+still decided whether to cast. Whenever the two disagreed the sting was re-queued every 1.5s,
+and a sting is a ranged shot — so it clipped **Auto Shot** on every press and the hunter looked
+like it had stopped attacking.
+
+The fix inverts the direction, and it is now a rule for the whole project: a second detection
+source may only ever **suppress** a cast, never shorten a throttle or unblock a gate.
+Suppression is safe however badly the two sources disagree — the worst case is a missed cast,
+never a loop.
+
+### ✨ Shaman — totems that notice being destroyed
+
+`GetTotemInfo` reads the element slot directly, which replaces both the buff-name guessing and
+the blind re-drop clock. `PLAYER_TOTEM_UPDATE` covers the case vanilla cannot see at all: a
+totem **killed or recalled**, rather than expired.
+
+Verified in game — Totemic Recall emptied two slots in the same instant and both were back
+**0.11s and 0.34s later**. This closes the long-standing open item *"Shaman
+totem-destruction detection"*.
+
+### 🐛 Fixed — a levelling shaman's totem sat dead for 25 seconds (no ClassicAPI needed)
+
+Totem durations are **rank dependent**. The re-drop table held max-rank values, so rank 1
+*Searing Totem* — which lasts 30s — was not re-dropped until 55s had passed. That is exactly
+the *"totem upkeep doesn't work"* report the table's own comment records.
+
+Durations are now read from the spell tooltip (the same approach *SpellCost* and *SpellRadius*
+already use, so it is right for any rank on any server), applied as a **ceiling**: a tooltip
+read can only ever make the re-drop earlier, never later.
+
+This one is worth calling out because it fixes the addon for players who do **not** run
+ClassicAPI. It was only *found* because ClassicAPI reported the real duration and contradicted
+the table.
+
+### 🐛 Fixed — a totem on cooldown was retried every 1.5s
+
+*Grounding* and *Fire Nova* have a 15s cooldown, *Stoneclaw* 30s against a 15s duration. The
+drop attempt never checked readiness, so the slot was retried throughout the dead window. The
+casts failed harmlessly, but each stamped the retry clock — delaying the first attempt that
+could actually have worked.
+
+### ✨ Hunter's Mark is treated as a shared debuff
+
+It does not stack and its bonus helps every attacker, so any hunter's copy counts: Aegis no
+longer marks over a raid mate's, and — more importantly — a Mark it could not previously read
+no longer blocks the sting behind it. Stings and *Lacerate* stay owner-filtered; those are your
+own damage. Rank is deliberately ignored (it can only matter while levelling).
+
+### ✨ A range window
+
+`/sbr range`, or the *Range window* box in the minimap right-click panel. Shows the distance to
+your target on a scale banded into **melee · dead zone · ranged**, with the frame border
+carrying the same verdict so it reads from peripheral vision.
+
+The dead zone is the point: a hunter has three zones, not two, and the gap where neither melee
+nor ranged reaches is invisible in a text label. The band edges **calibrate themselves** by
+watching where the engine's own range verdict flips, because melee reach includes the target's
+hitbox and therefore differs per mob.
+
+There is always a real number, with or without ClassicAPI, because **UnitXP_SP3** is required
+anyway and resolves mobs. The source order took two corrections before release, both from play
+reports: leading with SuperWoW's `UnitPosition` showed `?` against every mob (it resolves for
+players only), and then leading with UnitXP silently changed the *metric* — it measures
+hitbox-adjusted where ClassicAPI measures centre-to-centre, so the number stopped matching the
+scale's own tick labels. Centre-to-centre wins, because that is the model the ticks and the
+client's spell ranges use. The learned edges are keyed to the metric and discarded if the
+source changes. ClassicAPI now sharpens only the band *edges*, which fall back to flat
+thresholds and say so with a trailing dot.
+
+### ✨ Subtlety rogue — raid support
+
+Spec tabs split the rogue panel three ways (the tab is a **view**; the rotation does not branch
+on it). The Subtlety path ranks *Expose Armor* as upkeep rather than an opener, gates *Shadow of
+Death* at five combo points, treats *Mark for Death* as a builder with a maximum-CP gate since
+it awards two points, and puts *Preparation* last. *Ghostly Strike* rides on its cooldown on top
+of the chosen builder.
+
+> ⚠️ **This spec has not been played.** Neither maintainer runs Subtlety; every existing profile
+> is Assassination, which is the spec the rotation was actually measured on. The Subtlety path
+> is written from `docs/rotations.md` with **no in-game verification** — the ability choices,
+> their order, and the combo-point gates are all first-draft judgement. Check it with
+> `/sbr trace` before trusting it, and please report what it does.
+
+### 🔧 Under the hood
+
+- All ClassicAPI access goes through one file, `Aegis_SBR_Capabilities.lua`, which owns every
+  probe and wrapper. Each returns **nil for "unknown"**, and callers must treat unknown as "not
+  a reason to act differently". Capabilities are probed per *function*, so an older DLL missing
+  one call still provides the rest.
+- `/sbr probe` records verification data passively into its own saved variable while you play,
+  read back with `scripts/read_probe.py`. Added because measurements are not practical in a
+  group — the rest of the party does not wait.
+- New core helper `Aegis_SBR:SpellDuration(name)`, tooltip-based and rank-aware.
+- `CLAUDE.md`'s blanket `C_*` ban is replaced by a single carve-out routed through the
+  capability file.
+
+---
+
 ## v1.1.8 — Rogue combo-point and energy economy, Holy Light gate, poison warning
 
 **Driven by a press log, not by theory.** The rogue trace can be written to SavedVariables, and

@@ -29,56 +29,80 @@ Author tag: "Mercaius & Subtilizer (Torchlite)".
 3. Run `python3 scripts/verify.py --all` after every edit; never hand off a failing file.
 
 ## Current State / Next Task
-The rebrand shipped as **v0.14.0** (pending the user's in-game verification: profile
-migration, `/sbr` + `/ar`, zero load errors). The addon is **Aegis_SBR** throughout:
-core global `Aegis_SBR`, UI `Aegis_SBR_UI`, layout `Aegis_SBR_Layout`, minimap
-`Aegis_SBR_Minimap`, frames `Aegis_SBR_*`/`AegisUI_*`, saved variable `AegisDB` (old
-`AutoRotaDB` still toc-listed as a rollback backup — drop it + clear on PLAYER_LOGOUT a
-few versions from now). **The Phase 1 audit-and-report is DELIVERED (v0.14.1)**: see
-`docs/audit-phase1-rotations.md` — a per-class discrepancy report (all 9 classes) with
-source/confidence/action/risk per finding, plus the roadmap-pre-authorized Hunter
-sting-detection fix (the only code change; no priorities touched). **Next: the user
-signs off findings per class; approved items are then implemented as their own gated,
-verified batches** (Critical Rule #1 still applies to every one of them).
+**Current release: v1.1.8** — the Rogue combo-point/energy economy cut, driven by replaying
+~2000 logged presses rather than theory (it reverted two of our own earlier changes with the
+measurements that killed them). Since v1.1.4: **v1.1.5** `/sbr spell <name>` toggles instead
+of silently switching off; **v1.1.6** Hunter's Mark leads the rotation (approved priority
+change) + `verify.py` lookbehind fix; **v1.1.7** Shaman totem + imbue overhaul, per-context
+buff lists, Paladin melee heal margin; **v1.1.8** as above.
 
-**Logos:** the user will provide raw logo image files LATER. They need converting to TGA
-(power-of-two dimensions, 32-bit, GIMP/uncompressed export — see `docs/roadmap.md` Phase 0
-step 6 and `docs/architecture.md`). The header stub is already wired: it tries
-`Interface\\AddOns\\Aegis_SBR\\logo` and falls back to the sigil + wordmark while the
-file is absent (1.12 `SetTexture` returns nil for a missing file). Drop the TGA in the
-addon root as `logo.tga` and do a **full relog** to see it.
+**⚠️ The working tree holds TWO INDEPENDENT UNCOMMITTED STRANDS.** They are unrelated and
+must not land in one commit — branch them separately from `origin/main`:
+1. **Rogue** — `ExposeDue` / `MarkReady` / `PreparationReady` (Expose Armor, Mark for Death,
+   Preparation) in `Class_Rogue.lua` + `Class_Rogue_UI.lua` + `docs/rotations.md`.
+2. **ClassicAPI integration** — everything below.
 
-All 9 class panels use a unified single-row config layout; all four healer specs have
-config panels; a Shaman totem system maintains totems across every spec via SuperWoW's
-`UNIT_CASTEVENT`. **Phase 2 is underway:** a shared weapon-enchant detection helper
-(`Aegis_SBR:WeaponEnchant`/`WeaponEnchantId`, `GetWeaponEnchantInfo`-based, v0.15.0) backs
-Shaman main-hand imbue upkeep and a Rogue poison reminder — the latter was superseded in
-v0.16.0 by the **BuffUp integration** (`Aegis_SBR_BuffUp.lua`): an optional buff-watch
-monitor (any class, clickable rebuff buttons) and a rogue poison Quick Bar (up to 4
-presets, click-applied, never cast from the macro). Also since Phase 2 began: Warrior
-Battle Shout + Demoralizing Shout upkeep (v0.15.3, audit items W1/W4), an opt-in Rogue
-execute finisher and a Paladin double-heal fix (v0.16.0), and an opt-in Warrior Master
-Strike (v0.16.2, Arms talent, off by default). Off-hand imbue, poison auto-apply beyond
-the Quick Bar, and Shaman totem-destruction detection remain open Phase 2 items.
-v1.1.0 was a docs-only cut (README overhaul + a `docs/research-classicapi.md` deep-dive);
-no rotation/engine code changed in it. v1.1.3 was the first code
-cut after it, folding in four merges: Rogue buff-renew slider + opt-in Cold Blood and the
-`/sbr log` press log (#30), a Paladin Consecration mana-recovery opt-out + creature-type
-cache (#31), the sub-level-20 +healing penalty applied to downranked Holy Light (#33), and
-the Warlock filler upgrades — Drain Soul as a main filler and a configurable Dark Harvest
-gap filler (#34). No priority ORDER changed in any of them. PR **#32** (a `holyLightPct`
-health gate for the same Flash of Light problem) was **closed unmerged**, superseded by #33
-— don't treat it as shipped; whether a slider is wanted, and which way it points, is open.
-**v1.1.4 is the current release** — two approved Warrior fixes from play reports: Bloodrage
-now holds while a Charge opener is pending (it flags combat, and Charge's gate is
-`not inCombat`, so it was *disqualifying* Charge for the whole pull, not merely going
-first), and Rend is gated on a cached `TargetIsBleedImmune()` so it stops re-firing every
-press at Mechanical/Elemental mobs. No priority ORDER changed. **Open Warrior item:** a
-report that Overpower is passed over for Slam/Heroic Strike — it already sits ABOVE both in
-the list, so the cause is elsewhere (likeliest: the Battle Stance gate at
-`Class_Warrior.lua:422` when `cfg.stanceDance` is off, or `overpowerExpiry` being zeroed at
-`:423` *before* a cast that then fails — Revenge has the same bug at `:407`). Awaiting a
-`/sbr log` capture; the Warrior trace already carries an `op=Y/N` field for exactly this.
+### ClassicAPI integration (uncommitted, unreleased)
+ClassicAPI is now **installed and active on the dev client** (`CLASSIC_API_VERSION = 10911`,
+alongside SuperWoW + Nampower + UnitXP_SP3; nothing in the Required stack broke). The `C_*`
+ban is amended — see Hard Constraints; all access goes through **`Aegis_SBR_Capabilities.lua`**,
+which owns every probe and wrapper and returns `nil` for "unknown".
+
+New files: `Aegis_SBR_Capabilities.lua` (capability layer + passive probe log),
+`Aegis_SBR_Range.lua` (distance window with a self-calibrating melee/dead-zone/ranged scale),
+`scripts/read_probe.py` (reads the probe SavedVariable off disk). New SavedVariable
+`AegisProbe`; new commands `/sbr capi`, `/sbr probe`, `/sbr range`.
+
+**Wired into rotations (all suppress-only unless noted):** Warlock `DotRemaining` prefers the
+real expiry; Shaman Flame Shock holds on a known remaining time (covers Turtle's Molten Blast
+refresh, audit item **S1**); Shaman totems read the element slot directly and react to
+`PLAYER_TOTEM_UPDATE` — **this closes the open Phase 2 item "totem-destruction detection"**;
+Hunter sting and `DebuffUpAny` for Hunter's Mark. The `markOK` fix is the one change on the
+"adds casts" side and is **flagged for play-test**.
+
+**REVERTED, do not re-apply without a play-test:** the `InMeleeRange()` melee-range
+integration. Field data justifies it (49 of 128 boundary flips disagree with the 9.9yd proxy;
+the bounding-radius effect confirmed on a worldboss) but it is on the "adds casts" side and
+its sibling change caused the Auto Shot regression — see the Lessons list and
+`docs/research-classicapi.md`.
+
+**Verified in play (2026-08-18):** enemy debuff timers with caster; combo-point + talent
+durations (Rupture at 5 CP reads 22s = 16 base + 6 from *Taste for Blood*); Warlock DoT
+durations matching the module's own model to the decimal; totem destruction (Totemic Recall
+emptied two slots in one instant, both back in 0.11s / 0.34s); spell range in both directions
+with the bounding-radius effect on a worldboss.
+
+**The no-ClassicAPI fallback is verified too** — Hunter and Shaman both run with
+`ClassicAPI.dll` removed from `dlls.txt`: no load errors, rotation fires, totems are placed,
+the range window shows a real distance. That last one only works because the distance comes
+from **UnitXP_SP3** (Required), not from ClassicAPI; getting that source order wrong is what
+made the window dead-on-arrival without the DLL in the first draft.
+
+**Still open:** Shaman *Flame Shock* + *Molten Blast* refresh (audit item S1 — needs Elemental
+spec, no Flame Shock cast under the probe yet); `markOK` against **another** hunter's Mark in a
+raid; `C_LossOfControl` (wrapped but unused); the whole Subtlety rogue path. Also unconfirmed:
+whether the tooltip-duration fix actually shortens rank-1 Searing to ~27s — it is dead code on
+a ClassicAPI client, so only a no-ClassicAPI shaman exercises it, and the run so far only
+confirmed that totems are placed at all.
+
+The probe log collects most of this passively — `/sbr probe on`, play, `/reload`, then
+`py scripts/read_probe.py`.
+
+### Carried forward
+- **Warrior Overpower** (open since v1.1.4): reported as passed over for Slam/Heroic Strike,
+  though it already sits ABOVE both. Likeliest cause is the Battle Stance gate or
+  `overpowerExpiry` being zeroed before a cast that then fails (Revenge has the same shape).
+  Awaiting a `/sbr log` capture; the Warrior trace already carries `op=Y/N`.
+- **PR #32** (a `holyLightPct` health gate) was **closed unmerged**, superseded by #33 — not
+  shipped; whether a slider is wanted, and which way it points, is still open.
+- Phase 2 leftovers: off-hand imbue, poison auto-apply beyond the Quick Bar.
+- **Logos:** raw image files still pending from the user. They need TGA conversion
+  (power-of-two, 32-bit, uncompressed). The header stub already tries
+  `Interface\AddOns\Aegis_SBR\logo` and falls back to the sigil + wordmark while absent
+  (1.12 `SetTexture` returns nil for a missing file). Drop `logo.tga` in the addon root and do
+  a **full relog**.
+- `updatelog.md` was asked for but never created; `CHANGELOG.md` currently carries the
+  history. Confirm with the user whether a second, differently-scoped file is actually wanted.
 
 ## Tech Stack / Hard Constraints (WHAT — read carefully, these bite)
 - **Language: Lua 5.0** (Turtle 1.12 client). Non-negotiable:
@@ -114,8 +138,26 @@ the list, so the cause is elsewhere (likeliest: the Battle Stance gate at
   - Slider thumb is a FIXED-size texture positioned by its CENTRE travelling the full
     track — a tall thumb overhangs the ends. Keep the thumb small and inset the slider
     inside a full-span groove.
-- **Do NOT use**: `#`, `%`, `string.match`/`gmatch`, `C_*` namespaces, retail widget APIs,
+- **Do NOT use**: `#`, `%`, `string.match`/`gmatch`, retail widget APIs,
   `SecureActionButton`/protected functions, or anything introduced after client 1.12.
+- **`C_*` namespaces — banned by default, ONE carve-out** (amended 2026-08-18). They come
+  from **ClassicAPI**, a DLL that is *Recommended*, never *Required*, so the addon may
+  never assume they exist. The only permitted use is **through
+  `Aegis_SBR_Capabilities.lua`**, which owns every probe and wrapper:
+  - Never call a `C_*` function directly from the core, a class module, or the UI. Add a
+    wrapper to the capability file instead, so there is exactly one guarded call site per
+    function and one place to fix when a DLL version changes a signature.
+  - Gate on `self:Capability("<key>")`, not on `HasClassicAPI()` — an older DLL can be
+    present and still lack one function.
+  - **Every wrapper returns `nil` for "unknown"**, and callers must treat unknown as "not a
+    reason to act differently", falling through to the existing 1.12 path. `nil` is never
+    `0` and never `false`. This is the same stance `SpellCost` and `DotRemaining` already
+    take for unreadable data.
+  - The fallback path is the contract, not a courtesy: a player without ClassicAPI must get
+    **exactly** today's behaviour. Any change that a non-ClassicAPI player would also feel
+    is a normal rotation change and needs the Rule #1 gate on its own merits.
+  - Note that wiring a capability into a rotation gate changes WHEN an ability fires — that
+    is a rotation change under Rule #1 even though the plumbing itself is not.
 
 ## Architecture (WHAT)
 - **Shared core/UI shell** + **one rotation module per class** (9 vanilla classes), each
@@ -211,3 +253,9 @@ calculators block automated access.
     `(arg or "") == "on"` — that idiom sends every unrecognised argument, the empty one
     included, to `false`, so a bare command silently disables what it was meant to toggle
     (fixed v1.1.5 in three places). Test its result with `== nil`; `false` is a valid return.
+  - A second detection source (ClassicAPI) wired into a gate may only ever **suppress** a
+    cast, never shorten a throttle or unblock one. Letting it shorten the sting retry while
+    the OLD detection still decided whether to cast re-queued a ranged shot every 1.5s and
+    starved Auto Shot — the Hunter looked like it had stopped attacking (2026-08-18).
+    Suppression is safe however badly the two sources disagree: worst case is a missed cast,
+    never a loop. Anything on the "adds casts" side needs a play-test on that class first.

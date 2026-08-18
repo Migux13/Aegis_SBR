@@ -228,9 +228,44 @@ AQ40/Naxx).
   refreshed cheaply at 1 combo point, dumped into Eviscerate above that, mirroring the
   Slice-and-Dice upkeep pattern) is correct (audit R4, resolved — no code change).
 
-### Subtlety (dungeon support) `[T]` (niche)
-Ambush/Backstab; Honor Among Thieves (party crits → 5 energy); Cloaked in Shadows party
-damage bubble via low-CD Vanish (Elusiveness); Serrated Blades garrote.
+### Subtlety (raid support) `[T]` — implemented
+Not a damage-meter spec: two of its four abilities are worth more to the raid than to the
+rogue, and the rotation ranks them that way.
+
+**Expose Armor** → **Shadow of Death** → Rupture / Slice and Dice / Envenom → Eviscerate,
+with **Mark for Death** ahead of the builder and **Preparation** last.
+
+- **Expose Armor** is upkeep, not an opener. With *Improved Expose Armor* it reduces MORE
+  armor than Sunder Armor, so it replaces the warrior's stack rather than duplicating it.
+  Costs 5 combo points every ~30s that do not go into Shadow of Death or Eviscerate — that
+  is the trade. Re-applied only once the debuff has actually dropped: a target debuff carries
+  no readable time left on this client (`SnapshotTargetDebuffs` resolves names and stacks,
+  not durations), so there is no early-refresh window and a 25s throttle guards the case
+  where the debuff cannot be read at all.
+  **Gated on the talent** *(play report `[P]`, 2026-08-18)*: without *Improved Expose Armor*
+  the debuff merely matches the warrior's stack instead of beating it, so the five points buy
+  the raid nothing — Expose Armor then drops out of the rotation entirely rather than being
+  cast for a redundant debuff.
+- **Slice and Dice is refreshed with ONE combo point** *(play report `[P]`, 2026-08-18)*. The
+  spec's shape is a 5-CP finisher followed by a 1-CP SnD off the point *Ruthlessness* hands
+  straight back. This is the existing **Spend at most** ceiling (`refreshMaxCP`), which
+  therefore defaults to **1** for a Subtlety profile — unlike Assassination, where v1.1.8
+  measured 1 as right for short fights and wrong in a raid, so it stays at 5 there.
+- **Mark for Death is a BUILDER, confirmed by tooltip** *(2026-08-18)*: *"Awards 2 combo
+  points."* A play report grouped it with the 5-CP finishers; that reading is wrong, and the
+  ≤3 CP gate below stands. 40 energy, 5yd, instant, 3 min cooldown, requires 1 point in
+  *Preparation* and 30 points in Subtlety.
+- **Shadow of Death** banks a share of *all* damage the target takes for 6s (5 CP = 50%,
+  capped at 250% attack power) and releases it. 1 min cooldown, so it outranks the
+  refreshable buffs — a missed window is gone, a refresh is only late.
+- **Mark for Death** AWARDS 2 combo points, so it is a builder: 135% weapon damage,
+  unavoidable, +30% party attack power for 8s. Gated at ≤3 CP so the awarded points are not
+  thrown away, and blocked while its own buff is up (Preparation can hand the cooldown back
+  early enough for that to matter).
+- **Preparation** only when Mark for Death *and* Shadow of Death are both on cooldown.
+
+Still not covered: Honor Among Thieves, Cloaked in Shadows / low-CD Vanish, Serrated Blades.
+The Garrote stealth opener remains deferred — see below.
 
 ### Leveling `[T]`
 Combat (swords or daggers). Dagger: Ambush → Gouge → pool energy → Backstab →

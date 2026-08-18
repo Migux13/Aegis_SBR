@@ -11,12 +11,13 @@
 -- Run with a bare macro, spam it:   /sbr
 -- Configure per character:          /sbr ui
 -- Other commands: list, use <name>, off, new <name> [template],
---   del <name>, check, reset, debug, trace, plus class commands.
+--   del <name>, check, reset, debug, trace, capi, probe [on|off|clear],
+--   range [reset|scale <n>], plus class commands.
 -- /aegis is the long form; /ar stays as a legacy alias.
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.1.7",
+    ver = "1.1.9",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -70,6 +71,7 @@ function Aegis_SBR:InvalidateSpellIndex()
     Aegis_SBR.spellRanks = nil
     Aegis_SBR.costCache  = nil   -- slots moved, and a talent may have changed a cost
     Aegis_SBR.radiusCache = nil
+    Aegis_SBR.durCache   = nil   -- learning a rank changes the duration too
 end
 
 function Aegis_SBR:FindSpellSlot(name)
@@ -183,6 +185,67 @@ function Aegis_SBR:SpellRadius(name)
     -- failed to populate once must not freeze "no radius" in place.
     if radius then self.radiusCache[name] = radius end
     return radius
+end
+
+-- ============================================================
+-- Spell duration, read from the tooltip for the same reason SpellCost and
+-- SpellRadius are: it is RANK dependent, and a hardcoded number is wrong for
+-- every rank but one.
+--
+-- The case that forced this: rank 1 Searing Totem lasts 30s, the shaman module's
+-- TOTEM_REDROP table said 55 (the max-rank value). A levelling shaman's fire
+-- totem was therefore missing for 25 seconds before Aegis considered re-dropping
+-- it - which is exactly the "totem upkeep doesn't work" report that table's own
+-- comment records. Turtle is also free to rebalance any of it.
+--
+-- Returns nil when no duration line can be read. Callers must keep their own
+-- fallback; this is a correction, not a replacement.
+-- ============================================================
+function Aegis_SBR:SpellDuration(name)
+    if not self.durCache then self.durCache = {} end
+    local hit = self.durCache[name]
+    if hit then return hit end
+    local slot = self:FindSpellSlot(name)
+    if not slot then return nil end
+    if not scanTip then
+        scanTip = CreateFrame("GameTooltip", SCAN_TIP, nil, "GameTooltipTemplate")
+    end
+    scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+    scanTip:ClearLines()
+    scanTip:SetSpell(slot, BOOKTYPE_SPELL)
+    local secs
+    -- "Lasts N sec" is the authoritative phrasing and is preferred outright.
+    -- Only if it is absent do we fall back to the LAST "N sec" on the line,
+    -- because a tick interval ("every 2 seconds") comes before the duration
+    -- ("for 20 sec") and taking the first match would read the interval.
+    for i = 2, 8 do
+        local fs = getglobal(SCAN_TIP .. "TextLeft" .. i)
+        local txt = fs and fs:GetText()
+        if txt then
+            local _, _, n = string.find(txt, "[Ll]asts%s+(%d+)%s*sec")
+            if n then secs = tonumber(n); break end
+        end
+    end
+    if not secs then
+        for i = 2, 8 do
+            local fs = getglobal(SCAN_TIP .. "TextLeft" .. i)
+            local txt = fs and fs:GetText()
+            if txt then
+                local pos, last = 1, nil
+                while true do
+                    local s2, e2, n = string.find(txt, "(%d+)%s*sec", pos)
+                    if not s2 then break end
+                    last = tonumber(n); pos = e2 + 1
+                end
+                if last then secs = last end
+            end
+        end
+    end
+    -- Guard against a misread: anything outside a plausible spell duration is
+    -- discarded rather than cached, so a bad parse degrades to "unknown".
+    if secs and (secs < 3 or secs > 3600) then secs = nil end
+    if secs then self.durCache[name] = secs end
+    return secs
 end
 
 -- Can the player pay for this spell right now? UnitMana returns whichever
@@ -787,6 +850,12 @@ end
 -- Best effort melee proximity. CheckInteractDistance index 3 is about 9.9
 -- yards, a practical proxy for "close enough to fight". Used only to decide
 -- whether we are still running in, so we can pre-cast the seal on the way.
+--
+-- NOTE (2026-08-18): a ClassicAPI version of this - probing a real melee
+-- ability through C_Spell.IsSpellInRange, so the target's bounding radius
+-- counts - was reverted after a Hunter regression report (ranged attack stopped
+-- while in ranged mode). Cause not yet identified; do not re-apply without a
+-- reproduction. See docs/research-classicapi.md.
 function Aegis_SBR:InMeleeRange()
     if not UnitExists("target") then return false end
     return CheckInteractDistance("target", 3) and true or false
@@ -883,6 +952,18 @@ function Aegis_SBR:Tokenize(msg)
     local t = {}
     for w in string.gfind(msg or "", "%S+") do table.insert(t, w) end
     return t
+end
+
+-- Re-join tokens from index i onwards with single spaces. Needed wherever an
+-- argument is a SPELL NAME: "Serpent Sting" tokenizes into two words, and the
+-- t[2]-style reads used by the other commands would silently keep only the
+-- first. Returns "" when there is nothing from i onwards.
+function Aegis_SBR:JoinFrom(t, i)
+    local out = ""
+    for k = i, table.getn(t) do
+        if out == "" then out = t[k] else out = out .. " " .. t[k] end
+    end
+    return out
 end
 
 -- Resolve an on/off command argument against the value it is changing.
@@ -1207,6 +1288,10 @@ function Aegis_SBR:RunRotation()
     self:SnapshotBuffs()
     self:SnapshotTargetDebuffs()
     self:SampleTTK()
+    -- Probe log: combo points are read BEFORE the rotation runs, because a
+    -- finisher spends them and the cast event arrives with the counter already
+    -- at zero. No-op unless the probe log is enabled.
+    if self.ProbeNoteCombo then self:ProbeNoteCombo() end
     self.active:Rotate(cfg)
     UIErrorsFrame:Clear()
 end
@@ -1227,6 +1312,52 @@ function Aegis_SBR:EvalCommand(msg)
     if cmd == "check" then self:CmdCheck(); return end
     if cmd == "reset" then self:CmdReset(); return end
     if cmd == "acquire" then self:CmdAcquire(t[2], t[3]); return end
+    -- Range readout: distance to the target plus a melee / ranged / out band.
+    -- Also reachable from the minimap button's right-click panel.
+    if cmd == "range" then
+        if not Aegis_SBR_Range then
+            msgOut("range window module not loaded.", 1, 0.5, 0.3)
+            return
+        end
+        local sub = string.lower(t[2] or "")
+        if sub == "reset" then
+            Aegis_SBR_Range:Reset()
+            msgOut("range window: calibration, position and size reset.")
+            return
+        end
+        if sub == "scale" then
+            local n = tonumber(t[3])
+            if not n then
+                msgOut("usage: /sbr range scale <0.3-2.0>  (currently "
+                    .. string.format("%.2f", Aegis_SBR_Range:Scale()) .. ")", 1, 0.7, 0.3)
+                return
+            end
+            Aegis_SBR_Range:Build()
+            Aegis_SBR_Range:ApplyScale(n)
+            msgOut("range window scale " .. string.format("%.2f", Aegis_SBR_Range:Scale()) .. ".")
+            return
+        end
+        local on = Aegis_SBR_Range:Toggle()
+        msgOut("range window " .. (on and "shown" or "hidden") .. ".")
+        if on and not self:HasClassicAPI() then
+            msgOut("without ClassicAPI the bands use flat thresholds (marked with a dot).", 0.8, 0.8, 0.8)
+        end
+        return
+    end
+    -- Passive probe log: collects ClassicAPI verification data while playing,
+    -- so nothing has to be measured by hand mid-group.
+    if cmd == "probe" then
+        if self.CmdProbe then self:CmdProbe(t[2])
+        else msgOut("capability module not loaded.", 1, 0.5, 0.3) end
+        return
+    end
+    -- Capability report. Guarded so a client missing the optional capability
+    -- file gets a clear answer instead of a nil-call error.
+    if cmd == "capi" or cmd == "classicapi" then
+        if self.CmdClassicAPI then self:CmdClassicAPI()
+        else msgOut("capability module not loaded.", 1, 0.5, 0.3) end
+        return
+    end
     -- Toggles the pet window without going through the class panel, which is
     -- also how to tell a broken window apart from a broken switch.
     if cmd == "pet" then
@@ -1342,6 +1473,7 @@ function Aegis_SBR:OnAddonLoaded()
     -- it was open. Guarded because the file is optional in the load order.
     if Aegis_SBR_Preview then Aegis_SBR_Preview:Restore() end
     if Aegis_SBR_Pet then Aegis_SBR_Pet:Restore() end
+    if Aegis_SBR_Range then Aegis_SBR_Range:Restore() end
 end
 
 -- Printed once at PLAYER_LOGIN, when the chat frame is ready. ADDON_LOADED
@@ -1358,6 +1490,19 @@ function Aegis_SBR:Banner()
             .. ". Configure with /sbr ui, run with a bare /sbr macro.", 1, 0.8, 0.0)
     else
         DEFAULT_CHAT_FRAME:AddMessage("Aegis SBR v" .. self.ver .. " loaded, but there is no module for your class yet.", 1, 0.6, 0.3)
+    end
+    -- ClassicAPI is optional, so the probe runs here rather than at file load:
+    -- PLAYER_LOGIN is the first point where every DLL has certainly injected
+    -- and the chat frame can show the result. Guarded because the capability
+    -- file is optional in the load order, exactly like Preview and Pet.
+    if self.DetectClassicAPI then
+        self:DetectClassicAPI()
+        local line = self:ClassicAPIBannerLine()
+        if self:HasClassicAPI() then
+            DEFAULT_CHAT_FRAME:AddMessage("Aegis: " .. line, 0.4, 1, 0.4)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("Aegis: " .. line, 0.7, 0.7, 0.7)
+        end
     end
 end
 
@@ -1388,6 +1533,14 @@ ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 -- resolved spell NAME via OnCastEvent. Guarded so clients without SuperWoW
 -- (no such event) simply never receive it.
 if SpellInfo then ev:RegisterEvent("UNIT_CASTEVENT") end
+-- ClassicAPI backports PLAYER_TOTEM_UPDATE, which fires when a totem is
+-- dropped, expires, OR is destroyed early (killed / Totemic Recall). Vanilla
+-- has no way to see the destruction case at all, which is why the shaman module
+-- had to guess with a blind redrop clock. Registering an event the client does
+-- not know would error, so this is gated on the capability being present.
+if C_EventUtils and C_EventUtils.IsEventValid and C_EventUtils.IsEventValid("PLAYER_TOTEM_UPDATE") then
+    ev:RegisterEvent("PLAYER_TOTEM_UPDATE")
+end
 ev:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" and arg1 == "Aegis_SBR" then
         Aegis_SBR:OnAddonLoaded()
@@ -1408,12 +1561,25 @@ ev:SetScript("OnEvent", function()
         -- Out of combat the kill curve is meaningless, and keeping it would let
         -- the last fight's rate answer the first press of the next one.
         Aegis_SBR:ResetTTK()
+    elseif event == "PLAYER_TOTEM_UPDATE" then
+        if Aegis_SBR.active and Aegis_SBR.active.OnTotemUpdate then
+            Aegis_SBR.active:OnTotemUpdate(arg1)
+        end
+        if Aegis_SBR.ProbeOnTotem then Aegis_SBR:ProbeOnTotem(arg1) end
     elseif event == "UNIT_CASTEVENT" then
         -- Only successful casts ("CAST"), and only if the active module wants them.
         if arg3 == "CAST" and Aegis_SBR.active and Aegis_SBR.active.OnCastEvent then
             local sname
             if arg4 and SpellInfo then sname = SpellInfo(arg4) end
             if sname then Aegis_SBR.active:OnCastEvent(arg1, arg2, sname) end
+        end
+        -- Probe log: our OWN finisher casts, to read back what duration the
+        -- server actually granted for the combo points spent.
+        if arg3 == "CAST" and Aegis_SBR.ProbeOnCast then
+            local _, myGuid = UnitExists("player")
+            if myGuid and arg1 == myGuid and arg4 and SpellInfo then
+                Aegis_SBR:ProbeOnCast(SpellInfo(arg4))
+            end
         end
     end
 end)

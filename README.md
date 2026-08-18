@@ -1,4 +1,4 @@
-# Aegis: Single Button Rotation (v1.1.8)
+# Aegis: Single Button Rotation (v1.1.9)
 
 **One button. Your whole rotation.**
 
@@ -92,6 +92,51 @@ so they're always button-driven, never fired from the rotation macro.)
 reminds you in combat, and never overwrites an existing imbue behind your back or spends a
 global cooldown mid-fight unless you say so.
 
+**An upcoming-spell window (opt-in).** The *Upcoming spell window* box in the minimap
+right-click panel shows what your **next press would do** right now, and the condition that
+decided it — useful for learning a spec, and for answering "why did it cast *that*".
+
+It cannot lie to you, because it is not a second implementation: it runs the active module's
+real rotation in a **decide** mode where the cast and state-change operations record instead
+of firing. There is only one priority list, so the window and the press cannot disagree.
+Available for all nine classes.
+
+It deliberately shows **one** ability rather than a queue. Follow-up rows were built and then
+removed: they were correct often enough but hardly ever *changed*, so they carried no
+information and only made the window taller. Predicting properly would mean simulating energy,
+the global cooldown and combo points — and the rotation reacts to procs (*Clearcasting*, the
+parry window for *Riposte*, *Nightfall*) that cannot be predicted even in principle.
+
+**A pet window (Hunter, opt-in).** *Show pet window* in the Hunter panel. Level, experience
+toward the next level, and happiness, in a frame small enough to leave on screen — all of it
+is in the default Pet Details panel too, the point is that it is glanceable instead of
+something you open a frame to check. The **border** carries the happiness (green happy, yellow
+content, red unhappy), because that is the part you act on and colour reaches you across the
+screen in a way a number does not.
+
+There is deliberately no countdown to the next loyalty level: the client exposes no progress
+within a level, and a measured one restarted at every zone line — a zone change dismisses the
+pet for a moment, which looks exactly like a new level starting.
+
+**A range window (opt-in).** `/sbr range`, or the *Range window* box in the minimap
+right-click panel. Distance to your target on a scale banded into **melee · dead zone ·
+ranged**, with the frame border carrying the same verdict so you can read it out of the
+corner of your eye instead of looking at it.
+
+The dead zone is the point. A hunter has *three* zones, not two — melee reach, then a gap
+where neither melee nor ranged works, then the ranged band — and that gap is invisible in a
+text label. Pure casters simply have no melee zone and the same drawing shows that. The band
+edges **calibrate themselves** by watching where the engine's own range verdict flips, because
+melee reach includes the *target's* hitbox and so differs per mob: a large boss is reachable
+from further out than a small humanoid at the same distance.
+
+The **distance itself needs no ClassicAPI** — UnitXP_SP3 is required anyway and resolves
+mobs, so there is always a real number. ClassicAPI sharpens the *band edges*; without it they
+fall back to flat thresholds and say so with a trailing dot. The two sources measure slightly
+differently (centre-to-centre versus hitbox-adjusted), so the learned edges are discarded
+automatically if the source ever changes, rather than leaving the marker drifting against
+bands learned in the other unit.
+
 ---
 
 ## Requirements
@@ -103,9 +148,9 @@ recommended 1.18.1 setup — install it all and everything behaves as documented
 |---|---|---|
 | **[SuperWoW](https://github.com/balakethelock/SuperWoW)** | Required | The backbone. Healer specs cast on a **unit without dropping your target** (`CastSpellByName(spell, unit)`) — that's SuperWoW-only, and there's no fallback. It also supplies unit GUIDs (GUID-matched Assist targeting), `UNIT_CASTEVENT` (Auto Shot timing, Shaman totem tracking, Warlock cast confirmation), `SpellInfo` spell-ID debuff resolution, and weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
 | **[Nampower](https://github.com/brues-code/nampower)** | Required | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. Every queued cast falls back to a plain cast if it's missing, so the addon still *runs* — but cast-time rotations and the Hunter's Steady Shot weave lose their clip-free timing. |
-| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. Aegis doesn't call it directly today — it's a hard requirement of SuperCleveRoidMacros' distance and enemy-count conditionals, and part of the standard stack. |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. **Since v1.1.9 Aegis calls it directly**: it is what puts a real number in the range window, for players *and* NPCs, on every client — SuperWoW's positions resolve only for players. It also remains a hard requirement of SuperCleveRoidMacros' distance and enemy-count conditionals. |
 | **[SuperCleveRoidMacros](https://github.com/brues-code/SuperCleveRoidMacros)** | Recommended | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. |
-| **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | A DLL backporting the modern Blizzard API to 1.12. **Aegis doesn't use it yet** — see [`docs/research-classicapi.md`](docs/research-classicapi.md) for what it could unlock (enemy debuff timers, exact spell range, profile import/export). |
+| **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | A DLL backporting the modern Blizzard API to 1.12. **Used since v1.1.9, and every use degrades cleanly without it.** It supplies what 1.12 simply cannot: real remaining time and a caster for a debuff on an *enemy*, exact spell range including minimum range and the target's hitbox, and live totem tracking that sees a totem **destroyed** rather than expired. `/sbr capi` reports what it found. See [`docs/research-classicapi.md`](docs/research-classicapi.md). |
 
 ---
 
@@ -167,6 +212,9 @@ flip abilities on and off, and set your thresholds.
 | `/sbrmap` | Show/hide the minimap button (right-click it for options) |
 | `/sbr debug` | Dump live buff/debuff names — the first stop when something won't fire |
 | `/sbr trace` | Per-press log of what the rotation decided and why |
+| `/sbr range` | Distance-to-target window with a melee / dead-zone / ranged scale |
+| `/sbr pet` | Show/hide the Hunter pet window |
+| `/sbr capi` | What ClassicAPI is providing (or that it isn't installed) |
 
 > ### 🗡️ Melee: put **Attack** on an action bar
 > Aegis keeps your white swing going by toggling the standard **Attack** ability, which it
@@ -234,6 +282,9 @@ A refined evolution of the *ExAutoRogue* logic focused on efficient combo point 
 - **Spend at most (combo-point ceiling):** Only the *duration* of those two buffs scales with combo points, and duration past the end of the fight is thrown away. Measured over 28 dungeon pulls, a fight runs about 20 seconds, the gap to the next one about 20 more, and the buff carries into the next pull for **0.0s**. Set this to **1** and the buffs are only ever refreshed with the single point *Ruthlessness* hands back, with every surplus point going into *Eviscerate* instead — in play that put 83 of 88 refreshes at one combo point and none at four or five. Leave it at **5 (off)** for raids, where the buff runs its full length. If energy is short the press is *held* rather than spent on an expensive refresh, with the buff itself as the valve: once it has actually dropped, it is refreshed at whatever is on hand.
 - **Reactionary Counters:** Instantaneous out-of-GCD execution for abilities like *Riposte* during active parry windows.
 - **Cooldown Automation:** Integrates *Adrenaline Rush* and *Blade Flurry* seamlessly, prioritizing them against Elite or Boss targets.
+- **Spec tabs (Assassination · Combat · Subtlety):** The panel is split by spec, because the three are played nothing like each other. The tab is a **view**, not a mode — the rotation does not branch on it, so anything you switched on stays on even while another tab is showing.
+- **Subtlety — raid support (new in v1.1.9):** Not a damage-meter spec: two of its four abilities are worth more to the raid than to you. **Expose Armor** is treated as *upkeep* rather than an opener — with *Improved Expose Armor* it reduces more armor than Sunder, so it replaces the warrior's stack instead of duplicating it, at the cost of five combo points every time it drops. **Shadow of Death** is gated at five points because the stored share and its cap both scale per point. **Mark for Death** awards two combo points, so it is ranked as a builder with a maximum-CP gate rather than a finisher, and **Preparation** fires last, only when both cooldowns are down. **Ghostly Strike** rides on top of the chosen builder on its own cooldown rather than replacing it. All four default ON for a Subtlety profile and OFF everywhere else.
+  > ⚠️ **Untested.** Neither maintainer plays Subtlety — every existing profile is Assassination, which is the spec the rotation was measured on. The Subtlety path is written from `docs/rotations.md` and has had **no in-game verification**. Treat it as a first draft: check it with `/sbr trace` before trusting it in a raid, and report what it actually does.
 - **Execute Low-HP Targets (opt-in, off by default):** Below a configurable health threshold (default 10%), *Eviscerate* fires with whatever combo points are on hand rather than waiting for your normal threshold. Two optional conditions narrow it: **Use from** sets a combo-point floor (unspent points cost nothing when the target dies with them, while a 1-point *Eviscerate* costs a full finisher's energy for less damage than the builder it displaces), and **Skip if alive past** cancels the dump when the target is measurably going to outlive that many seconds — an elite parked at 8% no longer collects weak finishers. Adds `hp=`, `en=`, `ttk=`, `exec=` and `cap=` fields to `/sbr trace`.
 - **Energy-aware Cold Blood:** *Cold Blood* is free and off the global cooldown, so it always "succeeds" — but the *Eviscerate* behind it does not, and one that fails for want of energy leaves a three-minute cooldown to be eaten by the next builder. It is now only armed when the finisher can actually be paid for. Costs are read from the spellbook tooltip, so talents and server rebalances are accounted for automatically.
 - **Poison Quick Bar:** Poison control lives in the **Poisons** section of the panel and the movable Quick Bar (part of the [upkeep monitors](#what-it-does)) — up to four presets, left-click for main hand, right-click for off hand, each button showing charge and time-remaining bars. Enter just the poison *type* (e.g. "Instant Poison", **no rank**) and whatever rank is in your bags is applied. A poison does not fade, it is *used up*, so the rebuff button warns before that happens: at **five charges or fewer** it turns yellow, blinks slowly and shows the count, and clicking it tops the weapon up. Once the poison is gone it turns red.
