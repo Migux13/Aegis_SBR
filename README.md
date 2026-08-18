@@ -92,6 +92,21 @@ so they're always button-driven, never fired from the rotation macro.)
 reminds you in combat, and never overwrites an existing imbue behind your back or spends a
 global cooldown mid-fight unless you say so.
 
+**A range window (opt-in).** `/sbr range`, or the *Range window* box in the minimap
+right-click panel. Distance to your target on a scale banded into **melee · dead zone ·
+ranged**, with the frame border carrying the same verdict so you can read it out of the
+corner of your eye instead of looking at it.
+
+The dead zone is the point. A hunter has *three* zones, not two — melee reach, then a gap
+where neither melee nor ranged works, then the ranged band — and that gap is invisible in a
+text label. Pure casters simply have no melee zone and the same drawing shows that. The band
+edges **calibrate themselves** by watching where the engine's own range verdict flips, because
+melee reach includes the *target's* hitbox and so differs per mob: a large boss is reachable
+from further out than a small humanoid at the same distance.
+
+With **ClassicAPI** the bands are exact; without it they fall back to flat thresholds and say
+so with a trailing dot, and the distance resolves for players but not for mobs.
+
 ---
 
 ## Requirements
