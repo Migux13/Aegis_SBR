@@ -44,6 +44,18 @@ git worktree remove ../_wt-feature
 A worktree is a second checkout of the same repository in another directory. The
 dev folder keeps `local/integration` the whole time, so live stays valid.
 
+## A NEW file needs a client restart, not a reload
+
+`/reload` re-runs the files the client already has open. It does not re-read the
+`.toc`, so a file added since the client started - a new module, a new texture -
+simply is not there. The addon then behaves as if the work was never done:
+`Icons/Grip.tga` rendered as nothing, and `Aegis_SBR_Pet.lua` looked like a
+toggle that did not work.
+
+Editing an existing file is fine with `/reload`. Adding one is not. When a
+change introduces a file, say so and restart the client before concluding
+anything about whether it works.
+
 ## Never stack a PR on another PR's branch
 
 Every branch is cut from `origin/main`, without exception. Setting a PR's base to

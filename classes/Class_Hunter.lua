@@ -30,7 +30,7 @@ local M = Aegis_SBR:NewClassModule("HUNTER")
 M.uiTitle = "Hunter"
 -- Rotate runs under Aegis_SBR:Preview without casting (see Pick/Later).
 M.previewReady = true
-M.uiHeight = 850
+M.uiHeight = 878
 M.meleeAutoAttack = false   -- managed here: Auto Shot (ranged) or Attack (melee)
 M.autoAcquireTarget = false -- a ranged class should not auto-pull random mobs; pick targets
 
@@ -378,6 +378,11 @@ function M:MaintainDebuff(name, interval)
     return true
 end
 
+-- Stings this client has actually been seen to read back off a target. Kept for
+-- the session, because it is a property of the CLIENT (SuperWoW name resolution,
+-- or an icon fragment that matches), not of any one mob.
+M.stingSeen = {}
+
 -- Sting upkeep. Identical bookkeeping to MaintainDebuff, but the stings are
 -- ranged-weapon shots, so they must go out through the Nampower shot queue
 -- (QueueSpellByName) exactly like Steady / Arcane / Multi-Shot. Dispatching a
@@ -386,11 +391,26 @@ end
 -- up, which silently burns the reapply throttle and the sting never fires.
 function M:MaintainSting(name, interval)
     if not self:KnowsSpell(name) then return false end
-    if self:TargetDebuffUp(name, STING_TEX[name]) then return false end
+    if self:TargetDebuffUp(name, STING_TEX[name]) then
+        self:Later(function() self.stingSeen[name] = true end)
+        return false
+    end
     local id = self:TargetId()
     local rec = self.debuffThrottle[name]
     local now = GetTime()
-    if rec and rec.id == id and rec.t and (now - rec.t) <= (interval or 3) then
+    -- How long to wait before trying again.
+    --
+    -- The sting's full duration is only the right answer on a client that cannot
+    -- read the sting back off the target - there the timer IS the whole
+    -- knowledge. Once it has been read once, the debuff check above is the
+    -- authority, and waiting fifteen more seconds after it reports "not up" is
+    -- simply wrong: a shot that missed or was resisted then goes un-reapplied for
+    -- the sting's entire duration. All that is still needed is the moment an
+    -- applied debuff takes to register, which is what STING_QUEUE_HOLD measures -
+    -- and it is the same beat the queue hold below already waits out.
+    local wait = interval or 3
+    if self.stingSeen[name] then wait = STING_QUEUE_HOLD end
+    if rec and rec.id == id and rec.t and (now - rec.t) <= wait then
         return false
     end
     if not self:Queue(name, "sting missing") then return false end
@@ -909,6 +929,10 @@ hunterFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 hunterFrame:RegisterEvent("CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES")  -- enemy attacks we avoided
 hunterFrame:RegisterEvent("CHAT_MSG_COMBAT_PET_HITS")                 -- our pet's damage
 hunterFrame:RegisterEvent("UNIT_CASTEVENT")                           -- SuperWoW: exact cast/shot timing
+-- A resisted, missed or immune shot of ours is reported here. Without it those
+-- look exactly like a sting that had just landed and not yet registered, so the
+-- reapply throttle sat on it for the sting's whole duration.
+hunterFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
 hunterFrame:SetScript("OnEvent", function()
     if event == "PLAYER_REGEN_ENABLED" then
         M.autoShotOn = false
@@ -921,6 +945,42 @@ hunterFrame:SetScript("OnEvent", function()
     elseif event == "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES" then
         if arg1 and string.find(string.lower(arg1), "dodge") then
             M.dodgeUntil = GetTime() + REACT_WINDOW
+        end
+    elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
+        -- "Your Serpent Sting was resisted by X." / "... missed X." The throttle
+        -- exists to stop a second cast while the first is still registering on
+        -- the target; a resist or a miss means there is nothing to register, so
+        -- it is cleared and the next press re-applies immediately. Matching only
+        -- the word "resisted" was the bug: a MISS left the throttle standing and
+        -- the sting went unapplied for its full fifteen seconds.
+        --
+        -- Still deliberately narrow: only our own shots, named in the line.
+        local shot
+        if arg1 then
+            for name in pairs(STING_TEX) do
+                if string.find(arg1, name, 1, true) then shot = name; break end
+            end
+        end
+        if shot then
+            if string.find(arg1, "immune") then
+                -- "Your Serpent Sting failed. X is immune." Definitive, and
+                -- better than the 2.5s inference in StingBlocked, which only
+                -- dares to conclude immunity on an Undead. The throttle is left
+                -- alone on purpose: there is nothing to retry. Only when the line
+                -- names the CURRENT target, so a message about something else
+                -- cannot silence the sting on this one.
+                if shot ~= "Hunter's Mark" then
+                    local tname = UnitName("target")
+                    local _, guid = UnitExists("target")
+                    if guid and tname and string.find(arg1, tname, 1, true) then
+                        M.stingImmune[guid] = true
+                    end
+                end
+                M.stingTry = nil
+            elseif string.find(arg1, "resist") or string.find(arg1, "miss") then
+                M.debuffThrottle[shot] = nil
+                M.stingTry = nil
+            end
         end
     elseif event == "CHAT_MSG_COMBAT_PET_HITS" then
         if arg1 and string.find(string.lower(arg1), "crit") then

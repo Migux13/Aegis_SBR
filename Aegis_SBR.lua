@@ -1227,6 +1227,17 @@ function Aegis_SBR:EvalCommand(msg)
     if cmd == "check" then self:CmdCheck(); return end
     if cmd == "reset" then self:CmdReset(); return end
     if cmd == "acquire" then self:CmdAcquire(t[2], t[3]); return end
+    -- Toggles the pet window without going through the class panel, which is
+    -- also how to tell a broken window apart from a broken switch.
+    if cmd == "pet" then
+        if Aegis_SBR_Pet then
+            local on = Aegis_SBR_Pet:Toggle()
+            msgOut("pet window " .. (on and "shown" or "hidden") .. ".")
+        else
+            msgOut("pet window module not loaded.", 1, 0.5, 0.3)
+        end
+        return
+    end
     if cmd == "minimap" then
         if Aegis_SBR_Minimap and Aegis_SBR_Minimap.ToggleShown then
             local hidden = Aegis_SBR_Minimap:ToggleShown()
@@ -1330,6 +1341,7 @@ function Aegis_SBR:OnAddonLoaded()
     -- Saved variables are in by now, so the preview window can restore whether
     -- it was open. Guarded because the file is optional in the load order.
     if Aegis_SBR_Preview then Aegis_SBR_Preview:Restore() end
+    if Aegis_SBR_Pet then Aegis_SBR_Pet:Restore() end
 end
 
 -- Printed once at PLAYER_LOGIN, when the chat frame is ready. ADDON_LOADED
