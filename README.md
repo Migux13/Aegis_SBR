@@ -92,6 +92,32 @@ so they're always button-driven, never fired from the rotation macro.)
 reminds you in combat, and never overwrites an existing imbue behind your back or spends a
 global cooldown mid-fight unless you say so.
 
+**An upcoming-spell window (opt-in).** The *Upcoming spell window* box in the minimap
+right-click panel shows what your **next press would do** right now, and the condition that
+decided it — useful for learning a spec, and for answering "why did it cast *that*".
+
+It cannot lie to you, because it is not a second implementation: it runs the active module's
+real rotation in a **decide** mode where the cast and state-change operations record instead
+of firing. There is only one priority list, so the window and the press cannot disagree.
+Available for all nine classes.
+
+It deliberately shows **one** ability rather than a queue. Follow-up rows were built and then
+removed: they were correct often enough but hardly ever *changed*, so they carried no
+information and only made the window taller. Predicting properly would mean simulating energy,
+the global cooldown and combo points — and the rotation reacts to procs (*Clearcasting*, the
+parry window for *Riposte*, *Nightfall*) that cannot be predicted even in principle.
+
+**A pet window (Hunter, opt-in).** *Show pet window* in the Hunter panel. Level, experience
+toward the next level, and happiness, in a frame small enough to leave on screen — all of it
+is in the default Pet Details panel too, the point is that it is glanceable instead of
+something you open a frame to check. The **border** carries the happiness (green happy, yellow
+content, red unhappy), because that is the part you act on and colour reaches you across the
+screen in a way a number does not.
+
+There is deliberately no countdown to the next loyalty level: the client exposes no progress
+within a level, and a measured one restarted at every zone line — a zone change dismisses the
+pet for a moment, which looks exactly like a new level starting.
+
 **A range window (opt-in).** `/sbr range`, or the *Range window* box in the minimap
 right-click panel. Distance to your target on a scale banded into **melee · dead zone ·
 ranged**, with the frame border carrying the same verdict so you can read it out of the
@@ -183,6 +209,7 @@ flip abilities on and off, and set your thresholds.
 | `/sbr debug` | Dump live buff/debuff names — the first stop when something won't fire |
 | `/sbr trace` | Per-press log of what the rotation decided and why |
 | `/sbr range` | Distance-to-target window with a melee / dead-zone / ranged scale |
+| `/sbr pet` | Show/hide the Hunter pet window |
 | `/sbr capi` | What ClassicAPI is providing (or that it isn't installed) |
 
 > ### 🗡️ Melee: put **Attack** on an action bar
