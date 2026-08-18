@@ -23,17 +23,21 @@
 -- frame or a mob size; the MARKER COLOUR comes straight from the live in-range
 -- check. So the colour is never wrong even while the zones are still settling.
 --
--- Fallback without ClassicAPI: the bar falls back to flat thresholds and says so
--- (a trailing dot on the label).
+-- DISTANCE SOURCES, in priority order, all established by measurement:
+--   1. UnitXP_SP3's UnitXP("distanceBetween", ...) - a REQUIRED dependency, and
+--      it resolves NPCs. This is why the window works for every player.
+--   2. ClassicAPI's UnitDistanceSquared - also covers NPCs.
+--   3. SuperWoW's UnitPosition - LAST, because it was measured to resolve for
+--      players only: every NPC target in a 40-minute capture returned nil. It
+--      cannot be the primary source for a window about the distance to a mob.
 --
--- DISTANCE SOURCES, measured 2026-08-18 in BRS and not what was first assumed:
--- SuperWoW's UnitPosition resolves for PLAYERS only - every NPC target in a
--- 40-minute capture came back nil. The number you see on a mob therefore comes
--- from ClassicAPI's UnitDistanceSquared, which has no name collision and does
--- cover NPCs. So without ClassicAPI this window shows "?" against mobs and a real
--- distance only against players, and the band scale never calibrates (Calibrate
--- needs a distance). That is a degraded window, not a broken one - but it is NOT
--- the "works for everyone" fallback the first version of this comment claimed.
+-- Getting that order wrong is what the first version did: it led with
+-- UnitPosition, and the window showed "?" against every mob on a client without
+-- ClassicAPI - a dead feature dressed up as a graceful degradation.
+--
+-- What ClassicAPI still changes: the BAND EDGES. Without it the distance and the
+-- marker are exact but the bands fall back to flat thresholds, marked with a
+-- trailing dot on the label so an estimate is never mistaken for a measurement.
 -- ============================================================
 
 Aegis_SBR_Range = {}
@@ -180,6 +184,23 @@ end
 -- treated as optional - true of both shapes.
 function AR:Distance()
     if not UnitExists("target") then return nil end
+
+    -- UnitXP_SP3 first, because it is a REQUIRED dependency and it resolves NPCs.
+    -- That ordering is the whole reason this window works for every player rather
+    -- than only for ClassicAPI users: verified in game 2026-08-18, returning
+    -- 40.16 / 37.71 against a mob on a client with ClassicAPI removed.
+    if UnitXP then
+        local ok, d = pcall(UnitXP, "distanceBetween", "player", "target")
+        if ok and type(d) == "number" and d >= 0 then return d end
+    end
+    -- ClassicAPI's own call. Also covers NPCs; kept as the first fallback.
+    if UnitDistanceSquared then
+        local ok, d = pcall(UnitDistanceSquared, "target")
+        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d) end
+    end
+    -- SuperWoW positions last: measured to resolve for PLAYERS ONLY - every NPC
+    -- target in a 40-minute capture came back nil - so it can never be the
+    -- primary source for a window whose whole job is the distance to a mob.
     if UnitPosition then
         local x1, y1, z1 = UnitPosition("player")
         local x2, y2, z2 = UnitPosition("target")
@@ -188,12 +209,6 @@ function AR:Distance()
             local dz = ((z1 and z2) and (z2 - z1)) or 0
             return math.sqrt(dx * dx + dy * dy + dz * dz)
         end
-    end
-    if UnitDistanceSquared then
-        -- pcall'd: a differing arity must degrade to "no reading", never throw
-        -- inside an OnUpdate.
-        local ok, d = pcall(UnitDistanceSquared, "target")
-        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d) end
     end
     return nil
 end

@@ -90,8 +90,14 @@ carrying the same verdict so it reads from peripheral vision.
 The dead zone is the point: a hunter has three zones, not two, and the gap where neither melee
 nor ranged reaches is invisible in a text label. The band edges **calibrate themselves** by
 watching where the engine's own range verdict flips, because melee reach includes the target's
-hitbox and therefore differs per mob. Without ClassicAPI it falls back to flat thresholds and
-says so with a trailing dot.
+hitbox and therefore differs per mob.
+
+The distance itself comes from **UnitXP_SP3**, which is required anyway — so the number and the
+marker are exact on every client, with or without ClassicAPI. That ordering had to be corrected
+before release: the first version led with SuperWoW's `UnitPosition`, which was then measured to
+resolve for *players only*, so the window showed "?" against every mob without ClassicAPI. A
+dead feature dressed up as a graceful degradation. ClassicAPI now sharpens only the band
+*edges*, which fall back to flat thresholds and say so with a trailing dot.
 
 ### ✨ Subtlety rogue — raid support
 

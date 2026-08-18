@@ -299,13 +299,20 @@ requires a play-test on the affected class first. Swapping `InMeleeRange()`'s ba
 **which ability fires at what range** — a rotation change, sign-off gate, however clearly it
 fixes a known defect.
 
-**Distance sources — corrected by the same capture.** SuperWoW's `UnitPosition` resolved for
-**players only**; every NPC target returned nil. Distance against a mob comes from
-ClassicAPI's `UnitDistanceSquared` (no name collision with SuperWoW, covers NPCs), confirmed
-working in game. Consequence: distance-to-a-mob is a **ClassicAPI** capability, not a
-SuperWoW one — anything built on it degrades without ClassicAPI rather than being
-universally available. The range window's own header carried the wrong assumption until this
-capture; it now documents the real sources.
+**Distance sources — corrected twice, and the second correction matters.** SuperWoW's
+`UnitPosition` resolved for **players only**; every NPC target returned nil. ClassicAPI's
+`UnitDistanceSquared` does cover NPCs — so the first conclusion was "distance-to-a-mob is a
+ClassicAPI capability". **That conclusion was wrong**, and a no-ClassicAPI test run exposed it:
+the range window showed `?` against every mob.
+
+`UnitXP_SP3` — a **Required** dependency all along — provides
+`UnitXP("distanceBetween", "player", "target")`, verified returning 40.16 / 37.71 against a mob
+on a client with ClassicAPI removed. It is now the primary source, ahead of both.
+
+The lesson is about search order, not APIs: the capability was reachable from the Required
+stack the whole time, and it was missed because the investigation started from ClassicAPI and
+stopped at the first source that worked. **Check what the Required dependencies already
+provide before concluding that something needs the optional one.**
 
 ### 5. `C_EncodingUtil` — makes roadmap **Phase 3** almost free — round-trip confirmed
 Phase 3's profile import/export is specced as a hand-rolled, Lua-5.0-safe serializer with a

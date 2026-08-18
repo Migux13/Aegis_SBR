@@ -496,6 +496,16 @@ end
 -- back nil - and a bare "?" could not distinguish "no API" from "API said no".
 local function probeDistance()
     if not UnitExists("target") then return nil end
+    -- Same priority as Aegis_SBR_Range:Distance, and for the same reason: UnitXP
+    -- is Required and resolves NPCs, UnitPosition only resolves players.
+    if UnitXP then
+        local ok, d = pcall(UnitXP, "distanceBetween", "player", "target")
+        if ok and type(d) == "number" and d >= 0 then return d, "xp" end
+    end
+    if UnitDistanceSquared then
+        local ok, d = pcall(UnitDistanceSquared, "target")
+        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d), "sq" end
+    end
     if UnitPosition then
         local x1, y1, z1 = UnitPosition("player")
         local x2, y2, z2 = UnitPosition("target")
@@ -504,13 +514,6 @@ local function probeDistance()
             local dz = ((z1 and z2) and (z2 - z1)) or 0
             return math.sqrt(dx * dx + dy * dy + dz * dz), "pos"
         end
-    end
-    -- ClassicAPI's own distance call. No name collision with SuperWoW, unlike
-    -- UnitPosition, so this is the one path that can cover NPCs. pcall'd: a
-    -- differing arity must degrade to "no reading", never throw.
-    if UnitDistanceSquared then
-        local ok, d = pcall(UnitDistanceSquared, "target")
-        if ok and type(d) == "number" and d >= 0 then return math.sqrt(d), "sq" end
     end
     return nil, "none"
 end

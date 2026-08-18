@@ -130,8 +130,9 @@ edges **calibrate themselves** by watching where the engine's own range verdict 
 melee reach includes the *target's* hitbox and so differs per mob: a large boss is reachable
 from further out than a small humanoid at the same distance.
 
-With **ClassicAPI** the bands are exact; without it they fall back to flat thresholds and say
-so with a trailing dot, and the distance resolves for players but not for mobs.
+The **distance itself needs no ClassicAPI** — it comes from UnitXP_SP3, which is required
+anyway, so the number and the marker are exact on any client. ClassicAPI sharpens the *band
+edges*; without it they fall back to flat thresholds and say so with a trailing dot.
 
 ---
 
@@ -144,7 +145,7 @@ recommended 1.18.1 setup — install it all and everything behaves as documented
 |---|---|---|
 | **[SuperWoW](https://github.com/balakethelock/SuperWoW)** | Required | The backbone. Healer specs cast on a **unit without dropping your target** (`CastSpellByName(spell, unit)`) — that's SuperWoW-only, and there's no fallback. It also supplies unit GUIDs (GUID-matched Assist targeting), `UNIT_CASTEVENT` (Auto Shot timing, Shaman totem tracking, Warlock cast confirmation), `SpellInfo` spell-ID debuff resolution, and weapon-enchant info. ↳ [Features wiki](https://github.com/balakethelock/SuperWoW/wiki/Features) |
 | **[Nampower](https://github.com/brues-code/nampower)** | Required | Spell queueing and cast timing, so a press during the tail of a cast fires the instant it's legal instead of eating your latency. Every queued cast falls back to a plain cast if it's missing, so the addon still *runs* — but cast-time rotations and the Hunter's Steady Shot weave lose their clip-free timing. |
-| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. Aegis doesn't call it directly today — it's a hard requirement of SuperCleveRoidMacros' distance and enemy-count conditionals, and part of the standard stack. |
+| **[UnitXP_SP3](https://codeberg.org/konaka/UnitXP_SP3)** | Required | Accurate distance and line-of-sight checks. **Since v1.1.9 Aegis calls it directly**: it is what puts a real number in the range window, for players *and* NPCs, on every client — SuperWoW's positions resolve only for players. It also remains a hard requirement of SuperCleveRoidMacros' distance and enemy-count conditionals. |
 | **[SuperCleveRoidMacros](https://github.com/brues-code/SuperCleveRoidMacros)** | Recommended | Conditional macros alongside Aegis; it also takes over auto-attack handling when present. |
 | **[ClassicAPI](https://github.com/brues-code/ClassicAPI)** | Recommended | A DLL backporting the modern Blizzard API to 1.12. **Used since v1.1.9, and every use degrades cleanly without it.** It supplies what 1.12 simply cannot: real remaining time and a caster for a debuff on an *enemy*, exact spell range including minimum range and the target's hitbox, and live totem tracking that sees a totem **destroyed** rather than expired. `/sbr capi` reports what it found. See [`docs/research-classicapi.md`](docs/research-classicapi.md). |
 
