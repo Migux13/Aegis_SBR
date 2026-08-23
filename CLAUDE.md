@@ -29,20 +29,18 @@ Author tag: "Mercaius & Subtilizer (Torchlite)".
 3. Run `python3 scripts/verify.py --all` after every edit; never hand off a failing file.
 
 ## Current State / Next Task
-**Current release: v1.1.8** — the Rogue combo-point/energy economy cut, driven by replaying
-~2000 logged presses rather than theory (it reverted two of our own earlier changes with the
-measurements that killed them). Since v1.1.4: **v1.1.5** `/sbr spell <name>` toggles instead
-of silently switching off; **v1.1.6** Hunter's Mark leads the rotation (approved priority
-change) + `verify.py` lookbehind fix; **v1.1.7** Shaman totem + imbue overhaul, per-context
-buff lists, Paladin melee heal margin; **v1.1.8** as above.
+**Current release: v1.1.9** — ClassicAPI support, the range window, and the Subtlety rogue
+path, shipped alongside the Hunter pet window and the Serpent Sting fixes. Since v1.1.4:
+**v1.1.5** `/sbr spell <name>` toggles instead of silently switching off; **v1.1.6** Hunter's
+Mark leads the rotation (approved priority change) + `verify.py` lookbehind fix; **v1.1.7**
+Shaman totem + imbue overhaul, per-context buff lists, Paladin melee heal margin; **v1.1.8**
+the Rogue combo-point/energy economy cut, driven by replaying ~2000 logged presses rather than
+theory (it reverted two of our own earlier changes with the measurements that killed them);
+**v1.1.9** as above.
 
-**⚠️ The working tree holds TWO INDEPENDENT UNCOMMITTED STRANDS.** They are unrelated and
-must not land in one commit — branch them separately from `origin/main`:
-1. **Rogue** — `ExposeDue` / `MarkReady` / `PreparationReady` (Expose Armor, Mark for Death,
-   Preparation) in `Class_Rogue.lua` + `Class_Rogue_UI.lua` + `docs/rotations.md`.
-2. **ClassicAPI integration** — everything below.
+Working tree clean, `main` in sync with `origin/main`, no open PRs.
 
-### ClassicAPI integration (uncommitted, unreleased)
+### ClassicAPI integration (shipped in v1.1.9)
 ClassicAPI is now **installed and active on the dev client** (`CLASSIC_API_VERSION = 10911`,
 alongside SuperWoW + Nampower + UnitXP_SP3; nothing in the Required stack broke). The `C_*`
 ban is amended — see Hard Constraints; all access goes through **`Aegis_SBR_Capabilities.lua`**,

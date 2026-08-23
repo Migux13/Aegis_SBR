@@ -280,6 +280,22 @@ local function trim(s) local r = string.gsub(s or "", "^%s*(.-)%s*$", "%1"); ret
 -- Attach a hover tooltip to any mouse-enabled frame. body lines are optional.
 -- Chains any existing OnEnter/OnLeave (e.g. the row-hover highlight) instead of
 -- overwriting it, so a control can both highlight its row and show a tooltip.
+-- One body line of a tooltip, wrapped.
+--
+-- The wrapping is GameTooltip's own, via AddLine's fifth argument. An earlier
+-- version ALSO split the text at 58 characters first and that was the cause of
+-- the ragged output: each hand-made chunk was then wrapped a second time at the
+-- tooltip's real pixel width, so lines alternated long and short. Character
+-- counting cannot line up with a proportional font in any case - fifty-eight
+-- narrow letters are far shorter than fifty-eight wide ones.
+--
+-- Nothing splits by hand any more. What keeps a tooltip on screen is the length
+-- of the text itself, which is why none of them runs past ~240 characters.
+local function tipAdd(text)
+    if not text or text == "" then return end
+    GameTooltip:AddLine(text, 1, 1, 1, 1)
+end
+
 local function Tip(frame, title, line1, line2)
     if not frame then return end
     local prevEnter = frame:GetScript("OnEnter")
@@ -288,8 +304,8 @@ local function Tip(frame, title, line1, line2)
         if prevEnter then prevEnter() end
         GameTooltip:SetOwner(frame, "ANCHOR_RIGHT")
         GameTooltip:SetText(title, 1, 0.82, 0)
-        if line1 then GameTooltip:AddLine(line1, 1, 1, 1) end
-        if line2 then GameTooltip:AddLine(line2, 1, 1, 1) end
+        tipAdd(line1)
+        tipAdd(line2)
         GameTooltip:Show()
     end)
     frame:SetScript("OnLeave", function()
@@ -464,6 +480,11 @@ end
 -- repeat the EnableMouse/SetAlpha pair. Used by the class config bodies to
 -- follow a checkbox's on/off and learned state.
 function Aegis_SBR_UI:SliderEnable(slider, on)
+    -- Tolerates nil. A row that loses its slider - a setting retired, a control
+    -- moved - otherwise takes the whole RefreshBody down with it, and every
+    -- control BELOW the failure is left unbound: the window does not look
+    -- broken, it looks scrambled, which is far harder to trace back.
+    if not slider then return end
     if on then
         slider:EnableMouse(true);  slider:SetAlpha(1)
     else
@@ -634,14 +655,18 @@ end
 -- like { enhancement = true, tank = true }); tagged sections only exist on
 -- screen while their spec's tab is active - Reflow stacks whatever is shown.
 -- Returns the section handle for SetDimmed, as before.
-function Aegis_SBR_Layout:Header(text, spec)
+-- `when` is an optional predicate: the section only exists on screen while it
+-- returns true. Same machinery the spec tags use, driven by the profile instead
+-- of the tab - for a block of controls that is meaningless until a switch above
+-- it is on, or one the player has collapsed to get the space back.
+function Aegis_SBR_Layout:Header(text, spec, when)
     self:_closeSection()
     local cont = CreateFrame("Frame", nil, self.p)
     cont:SetPoint("TOPLEFT", self.p, "TOPLEFT", 0, 0)
     cont:SetPoint("TOPRIGHT", self.p, "TOPRIGHT", 0, 0)
     cont:SetHeight(10)
     local sec = setmetatable({ regions = {}, controls = {}, dimmed = false,
-        cont = cont, spec = spec }, Section)
+        cont = cont, spec = spec, when = when }, Section)
     NineSlice(cont, "Interface\\AddOns\\Aegis_SBR\\Icons\\Card", 10,
         function(t) sec:_add(t, false) end)
     local fs = FS(cont, "GameFontNormal", string.upper(text or ""))
@@ -887,6 +912,9 @@ function Aegis_SBR_Layout:Reflow()
             if type(sec.spec) == "table" then show = sec.spec[cur] and true or false
             else show = (sec.spec == cur) end
         end
+        -- Checked after the spec tag, so a hidden tab always wins over a
+        -- predicate that would otherwise show the section on the wrong page.
+        if show and sec.when then show = sec.when() and true or false end
         if show then
             shown = shown + 1
             sec.cont:Show()

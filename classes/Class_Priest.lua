@@ -314,6 +314,11 @@ end
 -- re-queued while it is still landing and an instant DoT is reapplied on a
 -- sensible interval.
 M.dotThrottle = {}
+
+-- The DoTs this module maintains, for the resist handler at the bottom of the
+-- file. Kept next to the throttle it clears, since the two only make sense
+-- together.
+M.DOT_NAMES = { "Shadow Word: Pain", "Devouring Plague", "Holy Fire" }
 function M:ApplyDot(spellName, texFrag, interval)
     interval = interval or 3
     if self:TargetDebuffUp(spellName, texFrag) then return "up" end
@@ -366,9 +371,9 @@ end
 -- only if none of the probed heals are learned yet (very early leveling).
 function M:Reachable(u)
     if UnitIsUnit(u, "player") then return true end
-    if self:KnowsSpell("Heal") then return IsSpellInRange("Heal", u) == 1
-    elseif self:KnowsSpell("Flash Heal") then return IsSpellInRange("Flash Heal", u) == 1
-    elseif self:KnowsSpell("Renew") then return IsSpellInRange("Renew", u) == 1 end
+    if self:KnowsSpell("Heal") then return Aegis_SBR:SpellReaches("Heal", u)
+    elseif self:KnowsSpell("Flash Heal") then return Aegis_SBR:SpellReaches("Flash Heal", u)
+    elseif self:KnowsSpell("Renew") then return Aegis_SBR:SpellReaches("Renew", u) end
     return CheckInteractDistance(u, 4)
 end
 
@@ -713,3 +718,33 @@ function M:HandleCommand(cmd, t)
     end
     return false
 end
+
+-- ============================================================
+-- Resisted DoTs
+-- ============================================================
+-- A resist is not a cast failure: the cast completes and the spell is thrown
+-- away on landing, so nothing in the cast path can see it. The throttle above is
+-- stamped as though the DoT were up, and every press until the interval runs out
+-- reads "missing but recently cast" and answers "wait" - which returns from the
+-- rotation without doing anything. The result on screen is a priest that stalls
+-- for a few seconds after a resisted Shadow Word: Pain.
+--
+-- The combat log is the only place that knows, so it is read here and the
+-- throttle cleared: the next press re-applies immediately.
+--
+-- Deliberately not "immune": an immune target would turn the immediate retry
+-- into a loop, and there the interval is doing its job.
+-- ============================================================
+local priestResistFrame = CreateFrame("Frame")
+priestResistFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
+priestResistFrame:SetScript("OnEvent", function()
+    if not arg1 then return end
+    if not (string.find(arg1, "resist") or string.find(arg1, "miss")) then return end
+    for i = 1, table.getn(M.DOT_NAMES) do
+        local name = M.DOT_NAMES[i]
+        if string.find(arg1, name, 1, true) then
+            M.dotThrottle[name] = nil
+            return
+        end
+    end
+end)

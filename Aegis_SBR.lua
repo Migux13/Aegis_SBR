@@ -159,7 +159,7 @@ end
 -- - that one is how far you may CAST it, which for a totem is your own feet. So
 -- the left-hand lines are scanned for the first "N yards"; scanning the left
 -- side only is also what keeps the cast range on the right of line two out of
--- it. Pattern and approach follow Call of Elements, which does the same read.
+-- it. The same read is used elsewhere for totem radii, so the pattern is proven.
 function Aegis_SBR:SpellRadius(name)
     if not self.radiusCache then self.radiusCache = {} end
     local hit = self.radiusCache[name]
@@ -660,6 +660,29 @@ end
 -- between exact upkeep and a blind reapply timer).
 function Aegis_SBR:CanResolveDebuffNames()
     return SpellInfo ~= nil
+end
+
+-- Does this spell reach the unit?
+--
+-- IsSpellInRange answers 1 in range, 0 out of range, and -1 when it cannot
+-- judge: an unknown spell, missing range data, or a unit the spell cannot
+-- currently be cast on at all. ONLY an explicit 0 may block.
+--
+-- Reading -1 as "out of range" is how a healer stops healing somebody standing
+-- right next to them - an immunity bubble, a phase change, a brief untargetable
+-- moment all produce it, and the unit then vanishes from the heal list entirely
+-- with no message. The asymmetry decides the rule: a wrongly INCLUDED unit
+-- costs one failed cast, a wrongly EXCLUDED tank costs the fight.
+--
+-- Same stance the shaman's InSpellRange has always taken; this is that rule
+-- moved somewhere every module can reach it.
+function Aegis_SBR:SpellReaches(spell, unit)
+    if not spell or spell == "" then return true end
+    if not unit or not UnitExists(unit) then return false end
+    if not IsSpellInRange then return CheckInteractDistance(unit, 4) and true or false end
+    local r = IsSpellInRange(spell, unit)
+    if r == 0 then return false end
+    return true
 end
 
 function Aegis_SBR:ManaPct()

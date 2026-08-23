@@ -594,8 +594,8 @@ end
 -- heal is learned yet (very early leveling).
 function M:Reachable(u)
     if u == "player" then return true end
-    if self:KnowsSpell("Healing Touch") then return IsSpellInRange("Healing Touch", u) == 1
-    elseif self:KnowsSpell("Rejuvenation") then return IsSpellInRange("Rejuvenation", u) == 1 end
+    if self:KnowsSpell("Healing Touch") then return Aegis_SBR:SpellReaches("Healing Touch", u)
+    elseif self:KnowsSpell("Rejuvenation") then return Aegis_SBR:SpellReaches("Rejuvenation", u) end
     return CheckInteractDistance(u, 4) and true or false
 end
 

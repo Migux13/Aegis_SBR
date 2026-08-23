@@ -117,8 +117,7 @@ local cfgTotemRange = false
 -- radii come from Aegis_SBR:SpellRadius per totem.
 local TOTEM_RANGE = 20
 -- Tolerance on the radius, so a totem sitting exactly on the boundary does not
--- flicker between "in" and "out" with every step. Call of Elements uses the
--- same 7%.
+-- flicker between "in" and "out" with every step. 7% is the established value.
 local TOTEM_RANGE_SLACK = 1.07
 -- The four element slots, in one place so range checks and the recall can walk
 -- them without repeating the list.
@@ -557,8 +556,8 @@ end
 -- proxy only if neither heal is learned yet (very early leveling).
 function M:Reachable(u)
     if u == "player" then return true end
-    if self:KnowsSpell("Healing Wave") then return IsSpellInRange("Healing Wave", u) == 1
-    elseif self:KnowsSpell("Lesser Healing Wave") then return IsSpellInRange("Lesser Healing Wave", u) == 1 end
+    if self:KnowsSpell("Healing Wave") then return Aegis_SBR:SpellReaches("Healing Wave", u)
+    elseif self:KnowsSpell("Lesser Healing Wave") then return Aegis_SBR:SpellReaches("Lesser Healing Wave", u) end
     return CheckInteractDistance(u, 4) and true or false
 end
 
@@ -1125,10 +1124,9 @@ function M:MaintainAllTotems(cfg)
     if self:RecallTotems(cfg) then return true end
 
     -- All four in one press when the client can take it, one otherwise. The
-    -- condition is the presence of the Nampower queue API, which is the same
-    -- test Call of Elements uses for the same reason: without it a second
-    -- CastSpellByName in the same frame overrides the first instead of being
-    -- queued behind it, so only one totem would actually land.
+    -- condition is the presence of the Nampower queue API, and it is the right
+    -- test: without it a second CastSpellByName in the same frame overrides the
+    -- first instead of being queued behind it, so only one totem would land.
     --
     -- Nampower is a hard requirement for this addon, so the single-cast path is
     -- a safety net rather than a supported mode.
@@ -1544,8 +1542,8 @@ end)
 -- UNIT_MODEL_CHANGED with a GUID in arg1; "<guid>owner" resolves to whoever
 -- summoned it, which is what separates our own totems from every other one in
 -- the raid. The unit name carries the totem's spell name, so it maps straight
--- onto the element slot. Borrowed from Call of Elements, which uses the same
--- two facts to measure distance to a totem.
+-- onto the element slot. Those two facts are what make a distance to a totem
+-- measurable at all.
 --
 -- Registered only when UnitPosition exists: without SuperWoW the GUID would be
 -- useless anyway, and every distance check degrades to "cannot judge".
