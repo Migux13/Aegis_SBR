@@ -4,6 +4,114 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.0 (unreleased) — Paladin healing rebuilt, and DoTs that survive a resist
+
+### 🙏 Thanks
+
+**Holyhollie** play-tested every step of this, in real runs, with a real group — and paid for
+it. Several of the bugs below did not merely waste a cast: they left her healing into nothing
+while the party died around her. She kept reporting anyway, in detail, mid-run, and almost
+every fix in this release exists because of a line she wrote down. The rotation is hers as
+much as anyone's, and the wipes were on us.
+
+### ✨ Paladin healing, rebuilt around the established heal ladder
+
+Spell and rank are now chosen in two steps: **which spell**, then **which rank**. Holy Light is
+used when the target is below the healthy line *and* no Flash of Light is big enough to cover
+the deficit — otherwise the fast heal carries it. Within a spell, the ladder keeps the largest
+rank that still lands *under* the deficit, so a cast falls just short rather than spilling over.
+
+The previous selection did the opposite in both halves: it reached for Holy Light on *healthy*
+targets, and it picked the smallest rank that would **cover** the deficit, which overheals by
+construction. Measured afterwards: **every cast in a 13-minute capture landed inside 0–24%
+overheal**, against 41 casts at 100% waste before.
+
+New: minimum and maximum rank per spell, and a one-click **HPS toggle** between "Flash of Light
+only" and "Holy Light whenever it is the bigger heal".
+
+### ✨ Who gets the heal
+
+- **Your target outranks everything**, pets included.
+- **Aggro** is read for real — chained unit tokens give who a mob is actually attacking, no
+  threat addon and no retargeting — and losing health counts too, which covers a mob nobody has
+  targeted.
+- **A self threshold**, so a healer with ways out of trouble does not spend the group's cast on
+  themselves — but only while somebody else could use it.
+- **Pets** with the usual three settings, **raid subgroup filters**, and incoming heals from
+  other healers folded into the deficit where a heal-prediction library is present.
+- **Emergency bubble**: below a health share you choose, everything stops and Divine Shield goes
+  up. Off by default.
+
+Priority is expressed as a **health handicap**, and the rule it now obeys is that a handicap may
+reorder the queue but never remove somebody from it — eligibility reads real health, ranking
+reads adjusted health.
+
+### 🐛 Fixed — a resisted DoT stalled the whole rotation (Warlock, Priest)
+
+A resist is not a cast failure: the cast completes and the spell is thrown away on landing, so
+nothing in the cast path can see it. The reapply throttle was stamped as though the DoT were up,
+and every press until it expired answered "wait, still landing" — which returns from the rotation
+without doing anything. On an unreadable curse that interval is **20 seconds**. The combat log is
+read for resists and misses now, and the same bug was found and fixed in the Priest.
+
+### 🐛 Fixed — the paladin healed himself at full health, forever
+
+Three separate defects, all found from logs rather than argued:
+
+- A self fallback returned the player as a heal target at **100% health with a deficit of zero**,
+  and the rank ladder then cast its floor rank at him, press after press. 293 of 343 self
+  selections in one capture were at full health.
+- `CheckInteractDistance` gives no usable answer about the player, so "or out of melee reach"
+  read as true **on yourself** and cancelled Holy Shock's health threshold outright. The same
+  defect was leaving the paladin out of his own Holy Strike headcount.
+- The overheal cancel compared against zero instead of against how wasteful the heal already was
+  when chosen, so on a nearly-full group it cancelled its own decision, re-made it, and repeated —
+  visible as a rotation doing nothing until an *instant* heal slipped through.
+
+### 🐛 Fixed — the rotation fought over Flash of Light versus Holy Light
+
+A 0.4s timeout released casts that were merely **queued** behind a global cooldown. The next press
+re-decided, the target's health had drifted across the spell-choice line, a different spell was
+chosen and it clipped the one already flying. The end of a cast is now taken from the client's own
+`SPELLCAST_STOP` / `FAILED` / `INTERRUPTED` instead of a timer. Measured: 39 spell flips inside two
+seconds in one capture, 5 in the next — four of which were ordinary sequencing.
+
+### 🐛 Fixed — Seal of Wisdom needed an enemy
+
+Refreshing Seal of Wisdom required a hostile target in melee range, and sat behind the rotation's
+"no attackable target, stop here" guard. It is a **self buff**: a healer standing back with nothing
+targeted never refreshed it at all. Only the *judgement* needs a target; the two are separate now.
+
+### 🐛 Fixed — Retribution ran out of mana and could not climb out
+
+The paladin module never asked whether it could pay for a spell. At low mana the rotation kept
+choosing a strike, the cast failed silently, and the press was spent — every press. It falls
+through and keeps swinging now. Mana management is on in the Retribution template, and strike
+downranking in the levelling templates.
+
+### 🔧 Measured, not assumed
+
+- **Divine Favor is a crit talent** and was being applied as a flat healing multiplier, inflating
+  every Holy Shock prediction by 5% per rank. Model 724 against three non-crit landings of
+  587 / 576 / 567; without it, 579 against 576. A rank choice may never count on a crit.
+- Heal sizes are logged against what the server actually landed (`/sbr log on`), which is how the
+  above was found and how the remaining ~22-point flat offset across all heals will be settled.
+- Holy Strike fires **on cooldown** again. Its 93% / 3-target gate came from a manually pressed
+  macro, where the question is "is this press worth it as a group heal" — a rotation asks
+  something else entirely.
+
+### 🔧 Under the hood
+
+- `Aegis_SBR:SpellReaches` — only an explicit "out of range" may block. `IsSpellInRange` also
+  answers −1 for "cannot judge", and reading that as out of range is how a healer silently drops
+  somebody standing next to them. Applied across Paladin, Priest, Druid and Shaman.
+- Tooltips wrap. The wrap flag was missing, so a long line rendered at full width and ran off the
+  screen; the longest was 482 characters. Nothing exceeds 241 now.
+- A heal-path trace at last: before this release a healing paladin produced no trace output at
+  all, which is why half of the reports above had to be argued from theory.
+
+---
+
 ## v1.1.9 — ClassicAPI support, a range window, and a Subtlety rogue
 
 **Two strands.** The first makes Aegis use **ClassicAPI** where it is installed, for the three
@@ -104,8 +212,9 @@ thresholds and say so with a trailing dot.
 
 ### ✨ Subtlety rogue — raid support
 
-Spec tabs split the rogue panel three ways (the tab is a **view**; the rotation does not branch
-on it). The Subtlety path ranks *Expose Armor* as upkeep rather than an opener, gates *Shadow of
+Spec tabs split the rogue panel four ways — Starter, Assassination, Combat, Subtlety. The tab
+is a **view**: the rotation does not branch on it, so a setting stays on even while a tab does
+not show it. The Subtlety path ranks *Expose Armor* as upkeep rather than an opener, gates *Shadow of
 Death* at five combo points, treats *Mark for Death* as a builder with a maximum-CP gate since
 it awards two points, and puts *Preparation* last. *Ghostly Strike* rides on its cooldown on top
 of the chosen builder.
@@ -269,9 +378,9 @@ chasing them turned up three further gaps in the same area.
 
 ### 🐛 Fixed — a lapsed weapon imbue was invisible
 
-Standalone BuffUp watched the weapon slots in two modes, `item` (rogue poisons) and `spell`
-(shaman imbues) — the same slot check, differing only in how you put it back. **Only the item
-half was ported**, and the watch sat behind a hard rogue gate, so no shaman ever saw a prompt.
+The weapon-slot watch has two modes, `item` (rogue poisons) and `spell` (shaman imbues) — the
+same slot check, differing only in how you put it back. **Only the item half was built**, and
+the watch sat behind a hard rogue gate, so no shaman ever saw a prompt.
 The generic buff monitor cannot substitute: it scans `UnitBuff`, and a weapon enchant is not a
 player buff, so the imbue could not simply be added to the watch list instead.
 
@@ -552,12 +661,12 @@ opt-in and default-off, or a correction to a *value* the existing list already u
   this partly explains the community report that Holy Light crowds out Flash of Light above
   the emergency line. Only Holy Light needs the correction (ranks 1/2/3 come at level 1/6/14;
   Flash of Light starts at 20 and Holy Shock at 40, both at a factor of 1). Verified against
-  QuickHeal's stated formula rather than derived.
+  the stated formula rather than a derived one.
 - **Creature type is now cached per target** instead of calling `UnitCreatureType` on every
   press — `TargetIsUndeadOrDemon()` sits in the hot path and a target's type never changes.
 - *Not shipped:* a `holyLightPct` health-percentage gate for the same Flash of Light problem
   (#32) was **closed unmerged** in favour of the fix above. It treated the symptom rather
-  than the cause, and pointed the opposite way to QuickHeal, which reserves *Flash of Light*
+  than the cause, and pointed the opposite way to the established approach, which reserves *Flash of Light*
   for units in real danger rather than reserving Holy Light for them. Whether a slider is
   wanted at all — and which direction it should point — is worth re-measuring in game now
   that the rank estimate is correct.
@@ -670,17 +779,17 @@ the toggle (greyed when off) and hides when Sunder Armor isn't learned. No behav
 
 ---
 
-## v0.16.0 — BuffUp integration (buff monitor + rogue poison Quick Bar), Rogue execute, Paladin double-heal fix
+## v0.16.0 — Upkeep monitor (buffs + rogue poison Quick Bar), Rogue execute, Paladin double-heal fix
 
-**Feature + fixes.** Folds the standalone **BuffUp** addon into Aegis as an optional upkeep monitor, adds a rogue execute finisher, and fixes a Paladin double-heal. If you ran standalone BuffUp, you can now retire it — Aegis covers the same ground.
+**Feature + fixes.** Adds an optional upkeep monitor for buffs and rogue poisons, a rogue execute finisher, and fixes a Paladin double-heal.
 
-### ✨ BuffUp integration (new `Aegis_SBR_BuffUp.lua`)
+### ✨ Upkeep monitor (new `Aegis_SBR_BuffUp.lua`)
 Two **independent** features, each toggled in the minimap right-click panel (new "Upkeep monitors" section), so one can run without the other:
 - **Buff monitor** (all classes): watch chosen self-buffs; when one is missing, a clickable rebuff button appears on screen to recast it. Its own config window (class-coloured frame) opens from the minimap panel's **Configure** button — scan your current buffs and click to watch, click a watched entry to remove. Buff detection is name-based (rank/locale proof) with an icon-texture fallback; a `SPELLS_CHANGED` rescan keeps a newly-learned rank matched.
 - **Poison control** (rogue): a movable **Quick Bar** of up to 4 poison presets — left-click a preset for mainhand, right-click for offhand — plus optional rebuff buttons when a poison falls off. Presets are configured in the **Rogue class panel** (Poisons section): enter just the poison *type* (e.g. "Instant Poison", **no rank**) and whatever rank is in your bags is found and applied automatically. Each Quick Bar button shows charge and remaining-time bars (mainhand left, offhand right), captured on first apply. Applying a poison needs a real click, so it is always button-driven, never cast from the rotation macro. The bar auto-sizes to the number of configured presets, and preset labels abbreviate elegantly (drop the redundant "Poison", keep the rank).
 - Poison presets / buff watch list are stored per character (`AegisDB.buffup`), shared across profiles.
 - New shared UI primitive `Aegis_SBR_Layout:Button` (a clickable label+value row) backs the preset editors.
-- **Not ported from standalone BuffUp:** OG-Twink interop (dropped). Shaman weapon imbues are already covered by the class panel's Weapon-imbue upkeep (auto-cast, superior to a manual button), so they were intentionally left there.
+- **Deliberately not carried over:** a manual button for shaman weapon imbues. The class panel's Weapon-imbue upkeep already auto-casts them, which is better than a button to click.
 
 ### ✨ Added
 - **Rogue — Execute low-HP targets** (opt-in, default OFF; Finishers section). Below a configurable health threshold (default 10%), Eviscerate fires with whatever combo points are on hand instead of waiting for the normal threshold, so points aren't wasted on a kill. Ruthlessness guarantees at least one combo point after any finisher, so this is rarely blocked. Adds an `exec=` field to `/sbr trace`.
@@ -818,11 +927,11 @@ bug the roadmap pre-authorized as a non-priority fix:
 
 ## v0.13.15b — Paladin heal-mode gating and heal-rank selection, Rogue rank trace, Assist fix for support modules
 
-**Fix + tuning.** Closes a heal-mode gating gap in the Paladin's damage rotation, reworks the heal-spell/rank choice with a QuickHeal-inspired efficiency comparison, and fixes the new Assist targeting mode being silently inert for any support module (currently only the paladin heal mode). Developed and tested in-game on a Holy Paladin.
+**Fix + tuning.** Closes a heal-mode gating gap in the Paladin's damage rotation, reworks the heal-spell/rank choice around an efficiency comparison, and fixes the new Assist targeting mode being silently inert for any support module (currently only the paladin heal mode). Developed and tested in-game on a Holy Paladin.
 
 - **Rogue: max-rank trace.** `/ar trace` now reports the max known rank for every ability the rotation casts. All Rogue casts are bare `CastSpellByName(name)`, which vanilla already resolves to the highest known rank, so this line exists to make that fact verifiable in-game rather than assumed.
 - **Fix — Paladin damage/tank rotation steps leaking into heal mode.** *Strike*, *Holy Shield*, *Consecration*, *Hammer of Wrath*, *Repentance*, and *Exorcism* were missing a `not cfg.healMode` guard, so a toggle left on from the Damage tab (most visibly *Crusader Strike*) kept firing in heal mode outside its intended purpose (the Blessed Strikes Holy Shock reload), contradicting the Healer tab's own "Tank / Damage settings are ignored" description. All six steps are now gated consistently.
-- **Paladin: heal-rank selection reworked**, inspired by QuickHeal's approach:
+- **Paladin: heal-rank selection reworked**:
   - Healing-reduction debuffs (Mortal Strike and the like) inflate the effective deficit used for rank selection, then the committed/predicted heal is scaled back down since the extra healing never lands.
   - In-combat cast-time compensation pads the deficit before rank selection, since the target keeps losing health while the cast is in flight.
   - Below the Holy Shock emergency threshold, Flash of Light is kept over Holy Light even for a deficit it cannot fully cover — a fast partial heal beats risking the target dying mid-cast on a slow Holy Light.

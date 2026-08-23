@@ -91,13 +91,58 @@ M.HS_MANA  = { 225, 335, 410, 485 }
 -- an unpenalised Holy Light rank 1 looks like a ~690 heal when it actually lands
 -- ~230, so the rank picker would happily choose it and badly underheal.
 --
--- Verified against QuickHeal (QuickHealPaladin.lua), which documents the same
--- formula in a comment and applies it identically; its priest module derives a
--- different set of factors from the same rule, which confirms the reading.
+-- Cross-checked against an independent implementation of the same formula, and
+-- against a different set of factors derived from the same rule for another
+-- healing class, which confirms the reading.
 -- Only Holy Light is affected: ranks 1/2/3 are learnt at level 1/6/14. Flash of
 -- Light starts at level 20 and Holy Shock at 40, so both come out at a factor of
 -- 1 and need no table.
 M.HL_PEN = { 0.2875, 0.475, 0.775 }   -- ranks 1-3; nil (= 1) from rank 4 up
+
+-- ============================================================
+-- Heal ranks, per spell: rank, base heal, mana, +healing penalty factor.
+--
+-- The choice is made in two steps, which is the shape the established ladder
+-- uses and NOT what stood here before:
+--
+--   1. Which spell. Holy Light only when the target is BELOW the healthy line
+--      AND no Flash of Light is big enough to cover the need (or there is no
+--      Flash of Light at all, or a proc makes Holy Light cheap in time).
+--   2. Which rank, walking upward and keeping the last one whose heal is still
+--      SMALLER than what is missing - so the cast lands just under the deficit
+--      rather than just over it.
+--
+-- An earlier version of this file had step 1 inverted, reaching for Holy Light
+-- on HEALTHY targets. That is backwards: the long cast is for somebody a fast
+-- heal cannot save, not for somebody who is barely scratched.
+-- ============================================================
+M.HL_RANKS = {
+    { rank = 1, base =   43, mana =  35, pf = 0.2875 },
+    { rank = 2, base =   83, mana =  60, pf = 0.475 },
+    { rank = 3, base =  173, mana = 110, pf = 0.775 },
+    { rank = 4, base =  333, mana = 190 },
+    { rank = 5, base =  522, mana = 275 },
+    { rank = 6, base =  739, mana = 365 },
+    { rank = 7, base =  999, mana = 465 },
+    { rank = 8, base = 1317, mana = 580 },
+    { rank = 9, base = 1680, mana = 660 },
+}
+M.FOL_RANKS = {
+    { rank = 1, base =  67, mana =  35 },
+    { rank = 2, base = 102, mana =  50 },
+    { rank = 3, base = 153, mana =  70 },
+    { rank = 4, base = 206, mana =  90 },
+    { rank = 5, base = 278, mana = 115 },
+    { rank = 6, base = 348, mana = 140 },
+    { rank = 7, base = 428, mana = 180 },
+}
+
+-- Buff textures that make Holy Light instant or fast, and therefore free to use
+-- however hurt the target is. Both are detected by TEXTURE rather than by name,
+-- which is locale proof and does not depend on a spell id resolving.
+--   Holy Judgement          - next Holy Light one second faster
+--   Hand of Edward the Odd  - next spell instant
+local FORCE_HL_TEX = { "ability_paladin_judgementblue", "Spell_Holy_SearingLight" }
 
 -- Auto-read the gear +healing bonus by scanning equipped-item tooltips. Cached,
 -- refreshed when equipment changes. A manual healPower above zero overrides it.
@@ -157,14 +202,23 @@ M.templates = {
         manaManage = false, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
+        -- Downranking on for the starter: a levelling paladin has a small pool
+        -- and every rank of a strike hits nearly as hard for a fraction of it.
+        strikeDownrank = true,
         spells = { holyStrike = false, crusaderStrike = false, holyShield = false, hammerOfWrath = false, repentance = false },
     },
     retri = {
         seals = { debuff = "Seal of the Crusader", damage = "Seal of Righteousness" },
         consecInMana = false,
-        manaManage = false, manaLow = 30, manaHigh = 70,
+        -- Mana management ON, unlike every other template. Retribution is the
+        -- spec that runs itself dry: it spends on every strike and every judge
+        -- and has no cheap filler to fall back on. Leaving the one mechanism
+        -- that recovers mana switched off by default meant a questing paladin
+        -- went out of mana and stayed there (play report, 2026-08-22).
+        manaManage = true, manaLow = 30, manaHigh = 70,
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
+        strikeDownrank = true,
         spells = { holyStrike = true, crusaderStrike = true, holyShield = false, hammerOfWrath = false, repentance = false },
     },
     prot = {
@@ -182,8 +236,8 @@ M.templates = {
         hpManage = false, hpLow = 30, hpHigh = 70,
         strikeStyle = "autodps",
         spells = { holyStrike = false, crusaderStrike = false, holyShield = false, hammerOfWrath = false, repentance = false },
-        healMode = true, healThreshold = 75, useHolyShock = true, holyShockPct = 50, holyLightPct = 0, healPower = 0,
-        healWeaveManaFloor = 40, healReloadCS = true, healSplashHS = true,
+        healMode = true, healThreshold = 75, useHolyShock = true, holyShockPct = 50, healPower = 0,
+        healReloadCS = true, healSplashHS = true, hsMinHP = 100, hsMinTargets = 1,
         healManaSelf = true, healManaJudge = false,
     },
 }
@@ -280,7 +334,63 @@ function M:NormalizeProfile(c)
     -- Flash of Light is the mana-efficient workhorse, so some players want the
     -- big heal held back for people who are genuinely low rather than picked
     -- whenever the raw deficit happens to be large.
-    if c.holyLightPct == nil then c.holyLightPct = 0 end
+    -- Retired: a second Holy Light threshold. It said "no Holy Light above X%
+    -- health", which is the same sentence as ratioHealthy's "Holy Light below
+    -- X%" - two sliders about the same decision, pointing the same way, with
+    -- different names. Cleared rather than left dormant: a hidden setting that
+    -- still acts is worse than one you can see.
+    c.holyLightPct = nil
+    -- The "healthy" ratio. Below it a target is hurt enough to be worth a Holy
+    -- Light; above it the fast heal is used whatever the deficit. Above this the target is
+    -- considered safe enough to spend a 2.5s Holy Light on; below it, Flash of
+    -- Light takes over however far short it falls.
+    if c.ratioHealthy == nil then c.ratioHealthy = 60 end
+    -- Rank bounds per spell. The maximum caps downranking from the top, the
+    -- minimum forces at least that rank whenever mana allows.
+    if c.folMaxRank == nil then c.folMaxRank = 7 end
+    if c.hlMaxRank == nil then c.hlMaxRank = 9 end
+    if c.folMinRank == nil then c.folMinRank = 1 end
+    if c.hlMinRank == nil then c.hlMinRank = 1 end
+    -- Heal priority. A LIST of player names, in order, plus a switch.
+    --
+    -- The usual approach elsewhere is a FILTER - "heal main tanks only" on a
+    -- macro you choose to press. A one-button rotation cannot ask which macro you
+    -- meant, so the list has to influence the choice instead of restricting it.
+    if c.healPrio == nil then c.healPrio = false end
+    if type(c.healPrioList) ~= "table" then c.healPrioList = {} end
+    -- Your current friendly target counts as position 1 while it is selected.
+    if c.healPrioTarget == nil then c.healPrioTarget = false end
+    -- Only heal YOURSELF below this. A healer has more ways out of trouble than
+    -- anyone else - stepping out of a cleave is often enough - so being at 70%
+    -- is not a reason to spend a cast on yourself. 0 turns the exception off and
+    -- you are treated like any other group member.
+    if c.healSelfPct == nil then c.healSelfPct = 40 end
+    -- Prefer whoever is actually TAKING damage over whoever merely has a low
+    -- bar. 1.12 has no threat API and no way to enumerate the mobs, so this is
+    -- measured rather than asked: a unit that lost health in the last few
+    -- seconds is in danger, one sitting still at 40% is not.
+    if c.healAggro == nil then c.healAggro = false end
+    -- Pre-heal somebody who has aggro even while they are above the heal
+    -- threshold: the damage is coming, and topping them off first is cheaper
+    -- than catching them after.
+    if c.healPrecast == nil then c.healPrecast = false end
+    -- Emergency invulnerability. Below this share of your own health, everything
+    -- stops and the bubble goes up. 0 = off, and off is the default: a spell on
+    -- a five minute cooldown that also drops your damage by 60% is not something
+    -- an addon should decide for you unasked.
+    if c.panicPct == nil then c.panicPct = 0 end
+    -- Pets. 0 never, 1 only when no player needs healing, 2 equal to players.
+    -- A pet you have TARGETED is always considered, at any setting.
+    if c.petPriority == nil then c.petPriority = 1 end
+    -- Raid subgroups to ignore, keyed by group number. Empty = heal everyone.
+    if type(c.raidGroupSkip) ~= "table" then c.raidGroupSkip = {} end
+    -- Cancel a heal in flight once this share of it would be pure overheal.
+    -- 0 = off, which is the behaviour before this existed: a started cast always
+    -- finishes. Stopping a cast is visible and surprising, so it is opt-in.
+    if c.overhealCancel == nil then c.overhealCancel = 0 end
+    -- Grace period before a cancel may fire, so a cast is never cut the instant
+    -- it starts on a target somebody else is already healing.
+    if c.overhealCancelDelay == nil then c.overhealCancelDelay = 0 end
     if c.useHolyShock == nil then c.useHolyShock = true end
     if c.holyShockPct == nil then c.holyShockPct = 50 end
     -- Split the old single heal-weave toggle into two independent behaviours
@@ -288,12 +398,42 @@ function M:NormalizeProfile(c)
     if c.healReloadCS == nil then c.healReloadCS = (c.healWeaveStrikes ~= false) end
     if c.healSplashHS == nil then c.healSplashHS = (c.healWeaveStrikes ~= false) end
     c.healWeaveStrikes = nil
-    if c.healWeaveManaFloor == nil then c.healWeaveManaFloor = 40 end
+    -- Retired: a mana floor under the Holy Strike filler. Two things were wrong
+    -- with it. It gated a mana-RETURNING ability on having mana, so it switched
+    -- off exactly when it was needed; and it belonged to a second Holy Strike
+    -- path that has been removed - one switch now drives one rule, the headcount
+    -- trigger in HolyStrikeDue.
+    c.healWeaveManaFloor = nil
+    -- Holy Strike restrictions - and they RESTRICT. By default it goes out on
+    -- cooldown like any other strike.
+    --
+    -- These shipped at 93% / 3 targets, a pair of numbers lifted from a manually
+    -- pressed macro whose question was "is this worth pressing as a group heal".
+    -- A rotation asks something else entirely: Holy Strike is a damage ability on
+    -- a cooldown and the splash is a bonus, so holding it back means giving up
+    -- damage to avoid healing by accident. Both play reports said so from
+    -- opposite ends - while levelling it was the single largest source of
+    -- healing precisely because it was pressed constantly, and at three targets
+    -- it had to be pressed by hand.
+    if c.hsMinHP == nil then c.hsMinHP = 100 end
+    if c.hsMinTargets == nil then c.hsMinTargets = 1 end
+    -- Migration, once: profiles written while the old defaults were live carry
+    -- 93 / 3 as stored values, so a corrected DEFAULT never reaches them - and a
+    -- restriction nobody chose would go on silently holding Holy Strike back.
+    -- Only that exact pair is moved; anything else was set on purpose.
+    if c.hsMinHP == 93 and c.hsMinTargets == 3 then
+        c.hsMinHP = 100
+        c.hsMinTargets = 1
+    end
     if c.healPower == nil then c.healPower = 0 end
     -- Heal-mode mana upkeep. Self seal defaults on (free sustain); the group
     -- judge defaults off because it spends a GCD that cannot be a heal.
     if c.healManaSelf  == nil then c.healManaSelf  = true  end
     if c.healManaJudge == nil then c.healManaJudge = false end
+    -- Pre-load Holy Judgement during a lull. OFF by default: it is on the "adds
+    -- casts" side, and a cast added to a healer's rotation is exactly the kind of
+    -- change that has to be play-tested before it becomes the default.
+    if c.healJudgeHL == nil then c.healJudgeHL = false end
     return c
 end
 
@@ -432,12 +572,34 @@ end
 -- Cast a strike, optionally downranked to save mana. Picks the highest rank
 -- the current raw mana can afford (per the tables above), never above the
 -- highest known rank; at full rank it casts the base name.
+-- Can this spell be paid for right now?
+--
+-- The paladin module asked this nowhere at all, which is what makes running out
+-- of mana a trap rather than a phase. Pick only checks that a spell is KNOWN and
+-- then reports success, so at low mana the rotation kept choosing a strike, the
+-- cast quietly failed, and the press was spent. Every press. Nothing fell
+-- through to anything cheaper, and nothing noticed.
+--
+-- CanAfford answers true when the cost cannot be read, so an unreadable tooltip
+-- degrades to exactly the old behaviour rather than silencing an ability.
+function M:Affordable(name)
+    return Aegis_SBR:CanAfford(name)
+end
+
 function M:CastStrike(name, cfg)
+    -- Checked against the rank that will actually go out: a downranked strike
+    -- costs less, and refusing it at full-rank price would hold back the very
+    -- thing downranking exists for.
     if cfg.strikeDownrank then
         local maxR = self:MaxRank(name)
         local r = self:DownrankFor(name)
         if r and maxR > 0 and r < maxR then
             local ranked = name .. "(Rank " .. r .. ")"
+            -- No affordability gate on the downranked cast, deliberately. The
+            -- spell index is keyed by bare name, so the cost of a specific rank
+            -- cannot be read - and checking the FULL rank's price here would
+            -- refuse the cheap cast that downranking exists to make. A downrank
+            -- is already the answer to being short of mana.
             if Aegis_SBR.deciding then
                 local p = Aegis_SBR.decidePlan
                 p.spell = ranked; p.reason = "downranked to save mana"
@@ -447,6 +609,7 @@ function M:CastStrike(name, cfg)
             return true
         end
     end
+    if not self:Affordable(name) then return false end
     return self:Pick(name, "strike")
 end
 
@@ -545,7 +708,9 @@ function M:HandleSeals(cfg)
     -- Skipped if Judgement is not yet learned.
     if effDebuff ~= "" and canJudge and not self:DebuffEffectivelyUp(effDebuff) then
         if not self:HasBuff(effDebuff) then return self:Pick(effDebuff, "debuff seal") end
-        if self:IsReady("Judgement") then return self:Pick("Judgement", "stamp the debuff") end
+        if self:IsReady("Judgement") and self:Affordable("Judgement") then
+            return self:Pick("Judgement", "stamp the debuff")
+        end
         return false   -- seal up, waiting for judgement to apply the debuff
     end
 
@@ -560,7 +725,8 @@ function M:HandleSeals(cfg)
         if canWeave and self.weaving then
             if not self:HasBuff(dmg) then return self:Pick(dmg, "weave: damage seal up") end
             if canJudge and self:IsReady("Judgement") then
-                local c = self:Pick("Judgement", "weave: judge, then back to Wisdom")
+                local c = self:Affordable("Judgement")
+                    and self:Pick("Judgement", "weave: judge, then back to Wisdom")
                 self:Later(function() self.weaving = false end)
                 return c
             end
@@ -602,6 +768,7 @@ function M:HandleSeals(cfg)
             local tl = self:SwingTimeLeft()
             if tl and tl > 0.4 then return false end
         end
+        if not self:Affordable("Judgement") then return false end
         return self:Pick("Judgement", "judge the seal")
     end
     return false
@@ -657,12 +824,46 @@ end
 -- Also stamps our own expected cast completion (see StillCasting) - Holy
 -- Light's 2.5s cast is longer than the 1.5s global cooldown, so GcdReady()
 -- alone reports "ready" up to a full second before the cast actually finishes.
-function M:CommitHeal(unit, amount, castTime)
+-- Records the heal about to go out, and logs it.
+--
+-- `spell` and `deficit` are for the log only. This is the one place that knows
+-- both what was actually chosen and what the target was actually missing, so it
+-- is the only place overhealing can be measured rather than reconstructed - the
+-- trace line further up prints the candidate ranks BEFORE the choice is made.
+--
+-- The predicted heal is the module's own estimate, not the amount the server
+-- lands. It is the right number anyway for the question being asked: whether the
+-- RANK PICKER chose too big a heal. A gap between this and the log's health
+-- readings would be a separate bug, in the heal tables rather than the choice.
+--
+-- Inside Later, so a preview press neither commits nor logs.
+function M:CommitHeal(unit, amount, castTime, spell, deficit)
     self:Later(function()
         self.healTarget = UnitName(unit)
+        -- The unit token as well as the name: the overheal monitor has to read
+        -- live health during the cast, and a name cannot be queried.
+        self.healUnit = unit
+        self.healStart = GetTime()
         self.healAmount = amount or 0
+        -- How wasteful this heal ALREADY was when it was chosen. The cancel
+        -- monitor compares against this rather than against zero, so it can only
+        -- react to the situation changing during the cast - see below.
+        local a0 = amount or 0
+        local d0 = deficit or 0
+        self.healWaste0 = (a0 > 0) and ((a0 - d0) / a0 * 100) or 0
+        if self.healWaste0 < 0 then self.healWaste0 = 0 end
         self.healUntil = GetTime() + (castTime or 0) + 1.0
         self.castingUntil = GetTime() + (castTime or 0)
+        if Aegis_SBR.logging and spell then
+            local amt = amount or 0
+            local def = deficit or 0
+            local over = amt - def
+            if over < 0 then over = 0 end
+            Aegis_SBR:LogWrite(string.format(
+                "heal-cast %s on %s def=%.0f heal=%.0f over=%.0f (%.0f%%)",
+                spell, UnitName(unit) or "?", def, amt, over,
+                (amt > 0) and (over / amt * 100) or 0))
+        end
     end)
 end
 
@@ -685,6 +886,17 @@ function M:StillCasting()
     if CastingBarFrame and (CastingBarFrame.casting or CastingBarFrame.channeling) then
         return true
     end
+    -- castingUntil is cleared by the client's own SPELLCAST_STOP / FAILED /
+    -- INTERRUPTED at the bottom of this file, so it can be trusted outright.
+    --
+    -- It used to be given up after a fixed 0.4s instead, on the theory that a
+    -- refused cast never reaches the cast bar. That guess also released casts
+    -- that were merely QUEUED behind a global cooldown: the next press re-decided
+    -- from scratch, the target's health had drifted across the Flash-of-Light /
+    -- Holy-Light line in the meantime, a different spell was chosen, and it clipped
+    -- the one already flying. Reported as the rotation "fighting over which one to
+    -- use" - and it went away entirely at a threshold where the branch cannot
+    -- flip, which is what identified it. Measure the end of a cast, never guess it.
     return self.castingUntil and GetTime() < self.castingUntil
 end
 
@@ -709,17 +921,65 @@ function M:PendingFor(unit)
 end
 
 -- Units to consider for healing: raid1..N in a raid, else player + party1..N.
-function M:GroupUnits()
+-- Healing already on its way from OTHER healers, in points, or 0 when nothing
+-- can tell us. Optional in exactly the way ClassicAPI is: present, it sharpens
+-- the deficit; absent, everything behaves as before.
+--
+-- Our own pending heal is subtracted out - that one is already tracked by
+-- PendingFor and would otherwise be counted twice.
+function M:IncomingHeal(unit)
+    if not HealComm or not HealComm.getHeal then return 0 end
+    local nm = UnitName(unit)
+    if not nm then return 0 end
+    local total = HealComm:getHeal(nm) or 0
+    local mine = 0
+    if HealComm.GetMyPendingHeal then mine = HealComm:GetMyPendingHeal(nm) or 0 end
+    local other = total - mine
+    if other < 0 then other = 0 end
+    return other
+end
+
+-- True when this unit sits in a raid subgroup the profile has switched off.
+-- Only meaningful in a raid; in a party there are no subgroups.
+function M:GroupFiltered(cfg, idx)
+    if not cfg or type(cfg.raidGroupSkip) ~= "table" then return false end
+    if not idx or not GetRaidRosterInfo then return false end
+    local _, _, sub = GetRaidRosterInfo(idx)
+    return (sub and cfg.raidGroupSkip[sub]) and true or false
+end
+
+-- The units worth considering, with their raid index where they have one (so a
+-- subgroup filter can be applied) and whether they are a pet.
+function M:GroupUnits(withPets)
     local units = {}
     local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
     if nr > 0 then
-        for i = 1, nr do table.insert(units, "raid" .. i) end
+        for i = 1, nr do
+            table.insert(units, "raid" .. i)
+            if withPets then table.insert(units, "raidpet" .. i) end
+        end
     else
         table.insert(units, "player")
+        if withPets then table.insert(units, "pet") end
         local np = (GetNumPartyMembers and GetNumPartyMembers()) or 0
-        for i = 1, np do table.insert(units, "party" .. i) end
+        for i = 1, np do
+            table.insert(units, "party" .. i)
+            if withPets then table.insert(units, "partypet" .. i) end
+        end
     end
     return units
+end
+
+-- Raid index behind a unit token, for the subgroup filter. nil for party units
+-- and pets, which have no subgroup of their own.
+local function raidIndex(u)
+    local _, _, n = string.find(u, "^raid(%d+)$")
+    if not n then _, _, n = string.find(u, "^raidpet(%d+)$") end
+    return tonumber(n)
+end
+
+local function isPetUnit(u)
+    return (u == "pet") or string.find(u, "^partypet") or string.find(u, "^raidpet")
 end
 
 -- Self is always reachable; others must be within heal range. Uses
@@ -727,37 +987,384 @@ end
 -- Light, both 40yd) for an exact answer instead of CheckInteractDistance's
 -- ~28yd proxy, which under-filtered by 12yd. Falls back to the proxy only if
 -- neither heal is learned yet (very early leveling).
+-- Buffs that stop ALL damage.
+--
+-- These do NOT remove a paladin from the heal list. The bubble runs for ten
+-- seconds and then the same low health bar is standing there without it, so the
+-- free casting time is exactly when to top it up - just at low priority, behind
+-- anyone actually taking damage (see IMMUNE_HANDICAP).
+--
+-- Self only, and that is not a shortcut: your own heals land on you through your
+-- own Divine Shield, while somebody ELSE under one cannot be healed by you at
+-- all. Detecting theirs would also mean guessing from an icon, and a false
+-- positive would silently drop a group member from the heal list.
+--
+-- Hand of Protection is deliberately NOT here: it stops physical damage only,
+-- so somebody under it can still be burned down by magic and still wants heals.
+--
+-- Only checked for the player. Our own buffs resolve by name exactly; another
+-- unit's would have to be guessed from an icon, and a false positive there would
+-- silently drop a group member from the heal list.
+local IMMUNE_BUFFS = { "Divine Shield", "Divine Protection" }
+function M:SelfInvulnerable()
+    for i = 1, table.getn(IMMUNE_BUFFS) do
+        if self:HasBuff(IMMUNE_BUFFS[i]) then return true end
+    end
+    return false
+end
+
 function M:Reachable(u)
     if UnitIsUnit(u, "player") then return true end
-    if self:KnowsSpell("Flash of Light") then return IsSpellInRange("Flash of Light", u) == 1
-    elseif self:KnowsSpell("Holy Light") then return IsSpellInRange("Holy Light", u) == 1 end
+    if self:KnowsSpell("Flash of Light") then return Aegis_SBR:SpellReaches("Flash of Light", u)
+    elseif self:KnowsSpell("Holy Light") then return Aegis_SBR:SpellReaches("Holy Light", u) end
     return CheckInteractDistance(u, 4)
 end
 
 -- The healable group member with the lowest effective health below ratio,
 -- counting our own in-flight heal. Returns unit, missing health, ratio.
-function M:WorstHurt(ratio)
-    local units = self:GroupUnits()
-    local bestU, bestPct, bestDef = nil, ratio, 0
+-- Health handicap in PERCENTAGE POINTS, by position on the priority list.
+-- Position 1 carries none, position 2 twenty, and anyone not on the list
+-- thirty-five. A handicap makes a unit read as healthier than it is, so it only
+-- decides near-ties - which is the case worth deciding. A dps at 20% still out-
+-- ranks a tank at 90%; a tank at 60% now outranks a dps at 45%, which is the
+-- "the tank only had minimally more health" case that loses fights.
+local PRIO_HANDICAP = { 0, 20 }
+local PRIO_OTHERS = 35
+
+-- How long after losing health a unit still counts as in danger, and what not
+-- being in danger costs. The window is generous on purpose: a gap between two
+-- swings must not flip somebody out of danger mid-cast.
+local DANGER_WINDOW = 4
+local DANGER_HANDICAP = 25
+
+-- What being invulnerable costs in the order. NOT a skip: the bubble lasts ten
+-- seconds and then the same low health bar is standing there unprotected, so the
+-- right move is to top them up while it is free - just behind anybody who is
+-- actually being hit. Large enough that almost any real casualty outranks them.
+local IMMUNE_HANDICAP = 40
+
+-- Ceiling on the total. The handicaps are independent switches and were never
+-- meant to be summed without limit: a bubbled, unlisted, undamaged player scored
+-- 25 + 40 + 35 = 100 and so read as at FULL health whatever their real bar said,
+-- which does not delay a heal, it cancels it. Priority may reorder the queue; it
+-- may never remove somebody from it.
+local HANDICAP_MAX = 50
+
+-- Who currently has a mob's attention.
+--
+-- 1.12 has no threat API, but a unit token can be CHAINED: "party1target" is the
+-- mob a party member is fighting, and "party1targettarget" is whoever that mob
+-- is hitting back. Walking every group member's target and asking who it is
+-- attacking therefore gives real aggro - no threat library, no retargeting, and
+-- no SuperWoW needed. (UnitXP's enemy scan is not usable here: its verbs work by
+-- changing your target and restoring it afterwards, which a rotation running
+-- four times a second cannot do.)
+--
+-- The gap this leaves is real and is why the health test below stays: a mob
+-- beating on somebody that NOBODY in the group has targeted is invisible here.
+-- The two are independent positive signals and either one is enough.
+local AGGRO_UNITS_PARTY = 4
+local AGGRO_UNITS_RAID = 40
+function M:ScanAggro(units)
+    -- Every visible enemy's victim, as a unit token. Hostility is decided by
+    -- UnitCanAttack rather than by "not a friendly player": that is the direct
+    -- question, and it also covers charmed players and hostile pets.
+    local victims, nv = {}, 0
+    local function consider(enemy)
+        if not UnitExists(enemy) then return end
+        if UnitIsDead(enemy) then return end
+        if not UnitCanAttack(enemy, "player") then return end
+        local v = enemy .. "target"
+        if UnitExists(v) then nv = nv + 1; victims[nv] = v end
+    end
+    consider("target")
+    consider("mouseover")
+    consider("pettarget")
+    local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+    if nr > 0 then
+        if nr > AGGRO_UNITS_RAID then nr = AGGRO_UNITS_RAID end
+        for i = 1, nr do
+            consider("raid" .. i .. "target")
+            consider("raidpet" .. i .. "target")
+        end
+    else
+        for i = 1, AGGRO_UNITS_PARTY do
+            consider("party" .. i .. "target")
+            consider("partypet" .. i .. "target")
+        end
+    end
+
+    -- Matched by UNIT IDENTITY, not by name. Two players can share a name across
+    -- realms, a pet can carry its owner's, and a name lookup can come back empty
+    -- for a unit that is briefly out of range - none of which UnitIsUnit cares
+    -- about. Keyed by the unit token, which is what every caller passes in.
+    local hit = {}
     for i = 1, table.getn(units) do
         local u = units[i]
-        if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
-            and UnitIsFriend("player", u) and UnitHealthMax(u) > 0 and self:Reachable(u) then
-            local mx = UnitHealthMax(u)
-            local cur = UnitHealth(u) + self:PendingFor(u)
-            if cur > mx then cur = mx end
-            local pct = cur / mx
-            if pct < bestPct then
-                bestPct = pct; bestU = u; bestDef = mx - cur
+        if UnitExists(u) then
+            local n = 0
+            for j = 1, nv do
+                if UnitIsUnit(victims[j], u) then n = n + 1 end
+            end
+            if n > 0 then hit[u] = n end
+        end
+    end
+    self.aggroOn = hit
+end
+
+-- Health sampler plus the aggro scan. Throttled rather than run per press: the
+-- preview window asks the same question four times a second, and in a full raid
+-- the scan touches eighty unit tokens.
+local DANGER_SCAN = 0.25
+function M:SampleDanger(units)
+    local now = GetTime()
+    if self.dangerT and (now - self.dangerT) < DANGER_SCAN then return end
+    self.dangerT = now
+    self:ScanAggro(units)
+    if not self.dangerHP then self.dangerHP = {} end
+    if not self.dangerHit then self.dangerHit = {} end
+    for i = 1, table.getn(units) do
+        local u = units[i]
+        if UnitExists(u) then
+            local nm = UnitName(u)
+            if nm then
+                local hp = UnitHealth(u)
+                local prev = self.dangerHP[nm]
+                if prev and hp < prev then self.dangerHit[nm] = now end
+                self.dangerHP[nm] = hp
             end
         end
     end
-    return bestU, bestDef, bestPct
+end
+
+-- In danger when something is attacking them, or when they have been losing
+-- health. Two independent positive signals; either is enough, and neither can
+-- push anybody DOWN the order on its own - that is what the handicap does.
+function M:InDanger(unit)
+    -- Aggro is keyed by unit token (identity), the health history by name - a
+    -- name is the only key that survives from one scan to the next.
+    if self.aggroOn and self.aggroOn[unit] then return true end
+    local nm = UnitName(unit)
+    if not nm or not self.dangerHit then return false end
+    local t = self.dangerHit[nm]
+    return (t and (GetTime() - t) <= DANGER_WINDOW) and true or false
+end
+
+-- How many mobs are on this unit, 0 when none are visible. Read-only; the
+-- rotation does not use it yet, but it is what the trace shows.
+function M:AggroCount(unit)
+    if not self.aggroOn then return 0 end
+    return self.aggroOn[unit] or 0
+end
+
+-- Total handicap for a unit in percentage points, 0 when nothing applies.
+--
+-- Three independent sources, added together: the priority list, your current
+-- target, and whether the unit is actually taking damage. Each may only ever
+-- make a unit look HEALTHIER, never more hurt, so no combination of them can
+-- invent an emergency - and none of them is consulted for the emergency line,
+-- which always reads real health.
+function M:PrioHandicap(cfg, unit)
+    local h = 0
+
+    if cfg.healPrio then
+        local list = cfg.healPrioList
+        if list and table.getn(list) > 0 then
+            local name = UnitName(unit)
+            local found = nil
+            if name then
+                for i = 1, table.getn(list) do
+                    if list[i] == name then found = PRIO_HANDICAP[i] or PRIO_OTHERS end
+                end
+            end
+            h = h + (found or PRIO_OTHERS)
+        end
+    end
+
+    -- A friendly target you selected yourself is the clearest statement of
+    -- intent there is, so it overrides the list rather than adding to it.
+    if cfg.healPrioTarget and UnitExists("target") and UnitIsFriend("player", "target")
+        and UnitIsUnit(unit, "target") then
+        h = 0
+    end
+
+    -- Invulnerable, or simply not being hit. These are ONE fact, not two: the
+    -- bubble is what drops the aggro in the first place, so charging for both
+    -- would be counting the same safety twice. The stronger of the two wins.
+    local safe = 0
+    if UnitIsUnit(unit, "player") and self:SelfInvulnerable() then
+        safe = IMMUNE_HANDICAP
+    elseif cfg.healAggro and not self:InDanger(unit) then
+        safe = DANGER_HANDICAP
+    end
+    h = h + safe
+
+    if h > HANDICAP_MAX then h = HANDICAP_MAX end
+    return h
+end
+
+-- Chooses by ADJUSTED health, reports REAL health and the REAL deficit.
+--
+-- That split is the whole safety of the feature: the handicap may only ever
+-- decide who gets the next cast, never how big it is, and never whether the
+-- emergency line has been crossed. Everything downstream - Holy Shock, the
+-- danger guard above Holy Strike, the rank cascade - keeps seeing the truth.
+-- The smallest heal this paladin can actually cast, in points.
+--
+-- A deficit under this cannot be healed at all - every point of the cast is
+-- overheal by construction, because rank 1 is the floor of the ladder. Not a
+-- tuning value and not a guess: it is read from the same rank table and the same
+-- +healing the rank picker uses.
+function M:SmallestHeal()
+    local hp = self:GearHealBonus()
+    local e = self.FOL_RANKS[1]
+    if self:MaxRank("Flash of Light") < 1 then e = self.HL_RANKS[1] end
+    if not e then return 0 end
+    local coeff = (e == self.FOL_RANKS[1]) and (1.5 / 3.5) or (2.5 / 3.5)
+    return (e.base + coeff * hp * (e.pf or 1)) * self:HealTalentMod()
+end
+
+function M:WorstHurt(ratio, cfg)
+    local pets = cfg and (cfg.petPriority or 1) > 0
+    local units = self:GroupUnits(pets)
+    if cfg and (cfg.healAggro or cfg.healPrecast) then self:SampleDanger(units) end
+
+    -- Players and pets are judged separately, because a pet may only take the
+    -- cast under conditions a player never has to meet (see petPriority).
+    -- Eligibility is decided on REAL health, ranking on ADJUSTED health. Keeping
+    -- those apart is the whole safety of the priority system: a handicap may
+    -- reorder the queue, it may never push somebody out of it.
+    --
+    -- Both were the same test before, and the arithmetic then quietly excluded
+    -- people: an unlisted, undamaged player at 60% health carried +50 points and
+    -- so read as 110%, which is above any threshold - so with the party full and
+    -- one member at 60%, nothing was healed at all. That is the "sometimes it
+    -- won't heal me even when the party is full" report, and it was never about
+    -- the self threshold.
+    local bestU, bestPct, bestDef, bestReal = nil, 99, 0, nil
+    local petU, petPct, petDef, petReal = nil, 99, 0, nil
+    local selfU, selfDef, selfReal = nil, 0, nil
+    -- Whether the current best candidate is below the threshold for real, or is
+    -- only there as a pre-heal.
+    local bestReal2 = false
+    local anyPlayerHurt = false
+
+    for i = 1, table.getn(units) do
+        local u = units[i]
+        if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
+            and UnitIsFriend("player", u) and UnitHealthMax(u) > 0 and self:Reachable(u)
+            and not self:GroupFiltered(cfg, raidIndex(u)) then
+            local mx = UnitHealthMax(u)
+            -- Our own heal in flight, plus whatever other healers have coming.
+            local cur = UnitHealth(u) + self:PendingFor(u) + self:IncomingHeal(u)
+            if cur > mx then cur = mx end
+            local pct = cur / mx
+            local pet = isPetUnit(u) and true or false
+
+            local skip = false
+            -- Your own health has its own threshold: a healer can usually step
+            -- out of trouble instead of spending a cast on themselves.
+            --
+            -- Only while somebody ELSE could use that cast, though. Held
+            -- unconditionally it produced the exact complaint "everyone was
+            -- fully healed, I was at 50%, and it refused to heal me" - the
+            -- threshold is about not stealing a cast from the group, not about
+            -- staying hurt in an empty room. Remembered here and used at the
+            -- bottom if nothing else wants healing.
+            if cfg and (cfg.healSelfPct or 0) > 0 and UnitIsUnit(u, "player")
+                and pct > (cfg.healSelfPct / 100) then
+                skip = true
+                -- Remembered as a fallback ONLY while genuinely below the heal
+                -- threshold. Without that second condition the fallback fired at
+                -- full health: being above the self threshold is true at 100%
+                -- too, so the player came back as a target with a deficit of
+                -- zero, and the rank ladder then cast its floor rank over and
+                -- over. That is the idle self-healing.
+                if pct < ratio then
+                    selfU, selfDef, selfReal = u, mx - cur, pct
+                end
+            end
+
+
+            local adj = pct
+            if cfg then
+                adj = pct + (self:PrioHandicap(cfg, u) / 100)
+                if adj > 1 then adj = 1 end
+            end
+
+            -- Pre-heal: something is already hitting them, so a deficit counts
+            -- even above the threshold that would normally ignore it. Never for
+            -- a full-health unit - there is nothing to heal.
+            local precast = false
+            if cfg and cfg.healPrecast and not pet and pct < 1 and self:InDanger(u) then
+                precast = true
+            end
+
+            -- A friendly unit you selected yourself outranks EVERYTHING: the
+            -- other switches, the pet rules, the thresholds. Clicking somebody
+            -- is the one unambiguous instruction the rotation ever gets, and it
+            -- used to lose to the pet/player split - a targeted pet was passed
+            -- over for any player below the threshold.
+            if cfg and cfg.healPrioTarget and pct < 1 and not skip
+                and UnitExists("target") and UnitIsFriend("player", "target")
+                and UnitIsUnit(u, "target") then
+                return u, mx - cur, pct
+            end
+
+            -- Below the threshold, or hurt enough that a pre-heal would land
+            -- something. The size test is what stopped the pre-heal from firing
+            -- on anybody who had taken a single hit in the last few seconds: at
+            -- 99% health the whole cast is overheal, so it is not a heal.
+            local deficit = mx - cur
+            local eligible = (pct < ratio)
+                or (precast and deficit >= self:SmallestHeal())
+            if not skip and eligible then
+                if pet then
+                    if petU == nil or adj < petPct then
+                        petPct = adj; petU = u; petDef = mx - cur; petReal = pct
+                    end
+                else
+                    -- A pre-heal is a filler: it may take the press only when
+                    -- nobody is actually below the threshold. Ranked behind
+                    -- every real casualty, never in front of one.
+                    local real = (pct < ratio)
+                    if real then anyPlayerHurt = true end
+                    local better = (bestU == nil) or (real and not bestReal2)
+                        or ((real == (bestReal2 or false)) and adj < bestPct)
+                    if better then
+                        bestPct = adj; bestU = u; bestDef = deficit; bestReal = pct
+                        bestReal2 = real
+                    end
+                end
+            end
+        end
+    end
+
+    if bestU then return bestU, bestDef, bestReal end
+
+    -- No player wants the cast. A pet gets it when it is ranked equal to
+    -- players, when nobody else needs healing, or when you have targeted it.
+    if petU and cfg then
+        local prio = cfg.petPriority or 1
+        if prio >= 2 or (prio == 1 and not anyPlayerHurt)
+            or (UnitExists("target") and UnitIsUnit(petU, "target")) then
+            return petU, petDef, petReal
+        end
+    end
+
+    -- Nobody else wants the cast, so the self threshold has nothing to protect.
+    if selfU then return selfU, selfDef, selfReal end
+    return nil, 0, nil
 end
 
 -- True while healing is needed, so the attack rotation yields. Uses real health
 -- (no in-flight prediction) so a heal already on the way still counts as demand
 -- and keeps a Seal of Wisdom judgement from stealing the global cooldown.
+-- RETIRED, kept only because the damage rotation's comments still refer to the
+-- idea. It used to yield the whole press whenever anybody was below the heal
+-- threshold, including when DoHeal had just failed to produce a cast - so a
+-- paladin who could not afford a heal stood still instead of meleeing, and the
+-- mana that would have paid for the heal never came back. Nothing calls it.
 function M:HealDemand(cfg)
     if self.healUntil and GetTime() < self.healUntil then return true end
     local ratio = (cfg.healThreshold or 75) / 100
@@ -773,6 +1380,35 @@ function M:HealDemand(cfg)
 end
 
 -- Healing talent modifiers: Healing Light +4%/rank, Divine Favor ~5%/rank.
+-- Is any of these buff textures on the player? Texture matching is what makes
+-- proc detection locale proof: the icon path is the same on every client, the
+-- buff name is not.
+function M:BuffTextureUp(frags)
+    if not GetPlayerBuffTexture then return false end
+    for i = 0, 31 do
+        local ix = GetPlayerBuff(i, "HELPFUL")
+        if not ix or ix == -1 then break end
+        local tex = GetPlayerBuffTexture(ix)
+        if tex then
+            for j = 1, table.getn(frags) do
+                if string.find(string.lower(tex), string.lower(frags[j]), 1, true) then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- Every talent that scales a heal, as one multiplier: Healing Light (+4%/rank)
+-- and Holy Power (+0.5%/rank, the crit talent's average contribution).
+function M:HealTalentMod()
+    local _, _, _, _, hlRank = GetTalentInfo(1, 6)
+    local _, _, _, _, hpRank = GetTalentInfo(1, 15)
+    return (1 + 0.04 * (hlRank or 0)) * (1 + 0.005 * (hpRank or 0))
+end
+
+-- RETIRED as a heal multiplier. Kept for reference only: the second return is
+-- Divine Favor, a CRIT talent, and treating it as extra healing is what made
+-- Holy Shock read 20% too large. Nothing calls this.
 function M:HealMods()
     local _, _, _, _, hlRank = GetTalentInfo(1, 6)
     local _, _, _, _, dfRank = GetTalentInfo(1, 13)
@@ -833,7 +1469,7 @@ function M:GcdReady()
 end
 
 -- Known texture fragments for effects that reduce healing received on a unit
--- (Mortal-Strike-type debuffs), mirroring QuickHeal's icon-based detection.
+-- (Mortal-Strike-type debuffs), detected by icon.
 -- Value is the healing multiplier applied per stack found.
 local HEAL_DEBUFF = {
     { frag = "Ability_CriticalStrike",     mult = 0.5 },  -- Mortal Wound
@@ -858,6 +1494,88 @@ function M:HealDebuffModifier(unit)
     return mult
 end
 
+-- Pick a rank inside one spell's ladder.
+--
+-- Walks upward and keeps the last rank whose padded heal is still smaller than
+-- what the target is missing, so the cast lands just under the deficit. Rank 1
+-- is the floor whenever it is affordable, `minRank` forces at least that rank
+-- regardless of need, and `maxRank` caps the top.
+--
+-- The padding is the cast-time compensation: the target keeps losing health
+-- while the cast is in flight, so a slow heal is judged against 80% of its size
+-- and a fast one against 90%. Out of combat there is nothing to compensate.
+function M:SelectRank(ranks, known, healneed, mana, healMod, talentMod, pad, minRank, maxRank)
+    local pick, size
+    for i = 1, table.getn(ranks) do
+        local e = ranks[i]
+        if e.rank <= known and e.rank <= (maxRank or 99) and mana >= e.mana then
+            local total = (e.base + healMod * (e.pf or 1)) * talentMod
+            if i == 1 or healneed > (total * pad) or e.rank <= (minRank or 1) then
+                pick, size = e.rank, total
+            end
+        end
+    end
+    return pick, size
+end
+
+-- Which spell, then which rank. Pure: no casting, no state. DoHeal and the trace
+-- both call it, so the line in the log can never describe a different rule than
+-- the one that actually chose the spell.
+-- Returns spell string, effective heal, cast time.
+function M:CascadePick(cfg, rankDeficit, pct, mana, hlFast)
+    local hlCast = hlFast and 1.5 or 2.5
+    local hp = (cfg.healPower and cfg.healPower > 0) and cfg.healPower or self:GearHealBonus()
+    local talentMod = self:HealTalentMod()
+    local folMod = (1.5 / 3.5) * hp
+    local hlMod  = (2.5 / 3.5) * hp
+
+    local folKnown = self:MaxRank("Flash of Light")
+    local hlKnown  = self:MaxRank("Holy Light")
+    if folKnown > table.getn(self.FOL_RANKS) then folKnown = table.getn(self.FOL_RANKS) end
+    if hlKnown  > table.getn(self.HL_RANKS)  then hlKnown  = table.getn(self.HL_RANKS) end
+    local noFL = folKnown < 1
+
+    -- In combat the deficit is compared against a discounted heal, because the
+    -- target keeps losing health while the cast flies.
+    local inCombat = UnitAffectingCombat("player")
+    local padFast = inCombat and 0.9 or 1.0
+    local padSlow = inCombat and 0.8 or 1.0
+
+    -- Step 1: which spell. The biggest Flash of Light this paladin knows decides
+    -- it - if that covers the need, the long cast is not worth its time.
+    local maxFL = 0
+    if folKnown >= 1 then
+        local e = self.FOL_RANKS[folKnown]
+        maxFL = (e.base + folMod) * talentMod
+    end
+    local flCovers = (folKnown >= 1) and (maxFL >= rankDeficit)
+    local healthy = pct >= ((cfg.ratioHealthy or 60) / 100)
+    -- Holy Judgement (hlFast) is the exception to the HEALTH condition, not to
+    -- the size one. Treating it as a blanket override is how a full-strength
+    -- paladin cast Holy Light rank 1 on a scratch: the buff forced the slow-heal
+    -- branch, and the rank ladder then picked its floor because the deficit was
+    -- tiny. A fast Holy Light is still the wrong tool when a Flash of Light
+    -- covers the need outright.
+    local useHL = noFL or ((not healthy or hlFast) and (not flCovers))
+
+    local rank, size
+    if useHL then
+        rank, size = self:SelectRank(self.HL_RANKS, hlKnown, rankDeficit, mana, hlMod,
+            talentMod, padSlow, cfg.hlMinRank, cfg.hlMaxRank)
+        if rank then return "Holy Light(Rank " .. rank .. ")", size, hlCast end
+    end
+    rank, size = self:SelectRank(self.FOL_RANKS, folKnown, rankDeficit, mana, folMod,
+        talentMod, padFast, cfg.folMinRank, cfg.folMaxRank)
+    if rank then return "Flash of Light(Rank " .. rank .. ")", size, 1.5 end
+    -- Flash of Light unaffordable or unknown: Holy Light is better than nothing.
+    if not useHL then
+        rank, size = self:SelectRank(self.HL_RANKS, hlKnown, rankDeficit, mana, hlMod,
+            talentMod, padSlow, cfg.hlMinRank, cfg.hlMaxRank)
+        if rank then return "Holy Light(Rank " .. rank .. ")", size, hlCast end
+    end
+    return nil, nil, nil
+end
+
 -- Heal decision. Returns true when a heal was cast (or the GCD is held) this
 -- press. Holy Shock for an emergency or an out-of-range unit, otherwise a
 -- downranked Flash of Light, with Holy Light for large deficits - unless the
@@ -865,8 +1583,14 @@ end
 -- stays the safer bet even if it cannot fully cover the deficit.
 function M:DoHeal(cfg)
     local ratio = (cfg.healThreshold or 75) / 100
-    local unit, deficit, pct = self:WorstHurt(ratio)
+    local unit, deficit, pct = self:WorstHurt(ratio, cfg)
     if not unit then return false end
+    -- Nothing worth casting. A deficit smaller than the smallest heal we own is
+    -- pure overheal by construction, so this is not a threshold to tune - it is
+    -- the point below which "healing" stops meaning anything. Kept here as well
+    -- as in the selection, because every path that can pick a target passes
+    -- through this one.
+    if deficit <= 0 or deficit < self:SmallestHeal() then return false end
 
     -- A heal is needed but the GCD still blocks a cast: yield without casting or
     -- predicting, so the attack rotation does not run and no false in-flight
@@ -880,11 +1604,23 @@ function M:DoHeal(cfg)
 
     local mana = UnitMana("player")
     local hp = (cfg.healPower and cfg.healPower > 0) and cfg.healPower or self:GearHealBonus()
-    local hlMod, dfMod = self:HealMods()
-    local C15, C25 = 1.5 / 3.5, 2.5 / 3.5
-    local folEff = self:EffHeals(self.FOL_HEAL, C15, hlMod, hp)
-    local hlEff  = self:EffHeals(self.HL_HEAL,  C25, hlMod, hp, self.HL_PEN)
-    local hsEff  = self:EffHeals(self.HS_HEAL,  C15, hlMod * dfMod, hp)
+    -- Only Holy Shock still needs a precomputed table; the two direct heals are
+    -- chosen inside CascadePick from their own rank ladders.
+    -- Divine Favor is NOT in here, and that is the correction: it raises Holy
+    -- Shock's CRIT CHANCE, not the size of a cast that does not crit. Folding it
+    -- in as a flat multiplier inflated every prediction by 5% per rank.
+    --
+    -- Measured, 2026-08-23: gear bonus 40, Holy Shock rank 3. The model said 724
+    -- against three non-crit landings of 587 / 576 / 567 - a 20% overestimate,
+    -- exactly the 1.25 of Divine Favor at 5/5. Without it: 579 predicted against
+    -- 576 measured, 0.6% out. The two crits in the same capture landed 871 and
+    -- 886, a factor of ~1.5 on the non-crit value, which is the crit multiplier
+    -- doing its own separate job.
+    --
+    -- A crit is a bonus, never something a rank choice may count on: predicting
+    -- the average would pick a rank too small and underheal whenever it does not
+    -- crit.
+    local hsEff = self:EffHeals(self.HS_HEAL, 1.5 / 3.5, self:HealTalentMod(), hp)
 
     -- Healing-reduction debuffs (Mortal Strike and the like) inflate the
     -- effective deficit for rank selection, so a stronger rank is picked;
@@ -892,6 +1628,23 @@ function M:DoHeal(cfg)
     -- down since the extra healing never lands.
     local hdb = self:HealDebuffModifier(unit)
     local rankDeficit = (hdb < 1) and (deficit / hdb) or deficit
+
+    -- ForceHL: a buff that makes the long heal cheap in time, so Holy Light
+    -- stops being a risk however hurt the target is. Holy
+    -- Judgement takes a second off it; Hand of Edward the Odd makes the next
+    -- spell instant. Both are the stated exception to the Holy Light gate below.
+    --
+    -- Detected by TEXTURE first - locale proof and independent of a spell id
+    -- resolving. The name check stays as a second positive source; either one
+    -- saying yes is enough.
+    --
+    -- It also corrects the cast time handed to CommitHeal, which otherwise
+    -- claimed 2.5s for a 1.5s cast and blocked the next press for the difference.
+    --
+    -- NOT the healing coefficient (2.5/3.5) further up: that follows the spell's
+    -- BASE cast time and does not move with a talent.
+    local hlFast = self:BuffTextureUp(FORCE_HL_TEX) or self:HasBuff("Holy Judgement")
+    local hlCast = hlFast and 1.5 or 2.5
 
     -- Holy Shock: instant, for an emergency or a hurt unit out of melee range.
     -- Holy Shock's own range (20yd) is shorter than Flash of Light/Holy
@@ -903,95 +1656,32 @@ function M:DoHeal(cfg)
     -- failed to reach (this was the bug: previously nothing was cast at all
     -- for a hurt unit sitting in that 20-40yd gap).
     if cfg.useHolyShock and self:KnowsSpell("Holy Shock") and self:OwnCDReady("Holy Shock")
-        and (pct <= (cfg.holyShockPct or 50) / 100 or not CheckInteractDistance(unit, 3))
-        and IsSpellInRange("Holy Shock", unit) == 1 then
+        -- Below the emergency line, or out of melee reach where only an instant
+        -- heal gets there in time.
+        --
+        -- The range half must never apply to YOURSELF. CheckInteractDistance is
+        -- an interaction range to another unit and gives no usable answer about
+        -- the player, so "not CheckInteractDistance('player', 3)" read as true
+        -- and cancelled the health threshold outright: Holy Shock went onto the
+        -- paladin at any health, the moment it came off cooldown. Reported as
+        -- "the heal spam on full health uses Holy Shock without any regard to
+        -- threshold" - and it is the same defect that was leaving the paladin out
+        -- of his own Holy Strike headcount.
+        and (pct <= (cfg.holyShockPct or 50) / 100
+            or (not UnitIsUnit(unit, "player") and not CheckInteractDistance(unit, 3)))
+        and Aegis_SBR:SpellReaches("Holy Shock", unit) then
         local hs, amt = self:PickRank("Holy Shock", hsEff, self.HS_MANA, rankDeficit, mana)
         if hs then
-            self:CommitHeal(unit, amt * hdb, 0)
+            self:CommitHeal(unit, amt * hdb, 0, hs, deficit)
             self:CastOn(hs, unit)
             return true
         end
     end
 
-    -- Cast-time compensation: the target keeps losing health while the cast
-    -- is in flight, so in combat the deficit is padded before comparing it
-    -- against each spell's ranks - Flash of Light (1.5s) less than Holy
-    -- Light (2.5s), mirroring QuickHeal's k/K factors.
-    local inCombat = UnitAffectingCombat("player") or UnitAffectingCombat(unit)
-    local folDeficit = inCombat and (rankDeficit / 0.9) or rankDeficit
-    local hlDeficit  = inCombat and (rankDeficit / 0.8) or rankDeficit
+    local pick, pickEff, castTime = self:CascadePick(cfg, rankDeficit, pct, mana, hlFast)
+    local amt = pick and (pickEff or 0) * hdb or nil
 
-    -- Below the Holy Shock emergency line, stay on the faster Flash of Light
-    -- even for a deficit it cannot fully cover - a fast partial heal beats
-    -- risking the target dying mid-cast on a slow Holy Light.
-    local emergency = pct <= (cfg.holyShockPct or 50) / 100
-
-    if emergency then
-        local fol, folRaw = self:PickRank("Flash of Light", folEff, self.FOL_MANA, folDeficit, mana)
-        if fol then self:CommitHeal(unit, folRaw * hdb, 1.5); self:CastOn(fol, unit); return true end
-        -- Flash of Light itself cannot be cast (unlearned/unaffordable): Holy
-        -- Light as a last resort, better than holding the GCD entirely.
-        local hl, hlRaw = self:PickRank("Holy Light", hlEff, self.HL_MANA, hlDeficit, mana)
-        if hl then self:CommitHeal(unit, hlRaw * hdb, 2.5); self:CastOn(hl, unit); return true end
-        return false
-    end
-
-    -- Not an emergency: get each spell's best candidate rank, then pick
-    -- whichever actually-landing heal (after the debuff modifier) wastes the
-    -- least - a rank that covers the deficit beats one that falls short, and
-    -- between two that cover it, the smaller one wins unless Holy Light is
-    -- clearly (>=10%) more efficient, which keeps trivial ties on the faster
-    -- Flash of Light instead of flip-flopping to a slower cast for pennies.
-    local fol, folRaw = self:PickRank("Flash of Light", folEff, self.FOL_MANA, folDeficit, mana)
-    local hl,  hlRaw  = self:PickRank("Holy Light", hlEff, self.HL_MANA, hlDeficit, mana)
-
-    -- Optional hard reservation of Holy Light for targets that are actually
-    -- low (holyLightPct, 0 = off). The comparison below already prefers Flash
-    -- of Light on efficiency, but it decides from the SIZE OF THE DEFICIT, not
-    -- from how hurt the unit is - so a big-health tank missing a lot in
-    -- absolute terms can pull a Holy Light while still sitting at a
-    -- comfortable percentage. This gate expresses the other intent directly:
-    -- above the threshold, spam the cheap fast heal regardless of deficit.
-    -- Only ever applied when Flash of Light is actually castable, so the gate
-    -- can never leave the unit with no heal at all.
-    if hl and fol and (cfg.holyLightPct or 0) > 0 and pct > (cfg.holyLightPct / 100) then
-        hl = nil
-    end
-
-    local folLanded = fol and (folRaw * hdb) or nil
-    local hlLanded  = hl  and (hlRaw  * hdb) or nil
-    local folCovers = folLanded and folLanded >= deficit
-    local hlCovers  = hlLanded  and hlLanded  >= deficit
-
-    -- Both cover the deficit, so both overheal and the one that lands less
-    -- wastes less. Holy Light has to beat Flash of Light by this margin to be
-    -- worth its slower cast.
-    --
-    -- The margin widens in melee range, because there a 2.5s cast costs more
-    -- than time: it costs weapon swings, and with Seal of Wisdom up those
-    -- swings are mana coming back. Reported from play - a paladin that stops
-    -- chaining Holy Lights keeps the seal running, melees far more often and
-    -- regains noticeably more mana, so the cast time compounds. At range, on a
-    -- raid boss, there are no swings to lose and the plain overheal comparison
-    -- is the honest one. InMeleeRange doubles as the dungeon/raid tell here,
-    -- which is why no explicit mode toggle is needed for it.
-    local hlMargin = self:InMeleeRange() and 0.75 or 0.9
-    local pick, amt, castTime
-    if folCovers and hlCovers then
-        if hlLanded <= folLanded * hlMargin then pick, amt, castTime = hl, hlLanded, 2.5
-        else pick, amt, castTime = fol, folLanded, 1.5 end
-    elseif folCovers then pick, amt, castTime = fol, folLanded, 1.5
-    elseif hlCovers then pick, amt, castTime = hl, hlLanded, 2.5
-    elseif fol and hl then
-        -- Neither covers it: take the bigger partial heal so the group is
-        -- topped off in fewer presses.
-        if folLanded >= hlLanded then pick, amt, castTime = fol, folLanded, 1.5
-        else pick, amt, castTime = hl, hlLanded, 2.5 end
-    elseif fol then pick, amt, castTime = fol, folLanded, 1.5
-    elseif hl then pick, amt, castTime = hl, hlLanded, 2.5
-    end
-
-    if pick then self:CommitHeal(unit, amt, castTime); self:CastOn(pick, unit); return true end
+    if pick then self:CommitHeal(unit, amt, castTime, pick, deficit); self:CastOn(pick, unit); return true end
     return false
 end
 
@@ -1043,44 +1733,132 @@ function M:HealStrikeEngine(cfg)
     return self:CastStrike("Crusader Strike", cfg)
 end
 
--- Toggle B - Holy Strike filler: in downtime with nobody to heal, strike so the
--- Holy Strike splash tops the melee group (Crusader Strike only as a fallback
--- before Holy Strike is trained). Gated by its own mana floor, so the filler
--- never starves a heal. Each cast is a GCD, hence its own opt-in.
-function M:HealWeaveStrike(cfg)
-    if not cfg.healSplashHS then return false end
-    if not self:HealMeleeReady(cfg) then return false end
-    -- Only worth the GCD if someone actually has a scratch to top off - by the
-    -- time this runs, HealStrikeEngine/DoHeal/HealDemand have already ruled out
-    -- anyone below the priority threshold, but a fully-topped group (everyone at
-    -- 100%) would otherwise still eat a splash cast for pure overheal.
-    if not self:WorstHurt(1.0) then return false end
-    local maxm = UnitManaMax("player")
-    if not maxm or maxm == 0 then return false end
-    if UnitMana("player") / maxm * 100 < (cfg.healWeaveManaFloor or 40) then return false end
-    local pick
-    if self:KnowsSpell("Holy Strike") then pick = "Holy Strike"
-    elseif self:KnowsSpell("Crusader Strike") then pick = "Crusader Strike" end
-    if not pick or not self:IsReady(pick) then return false end
-    return self:CastStrike(pick, cfg)
-end
-
 -- Heal-mode mana upkeep. Keeps Seal of Wisdom up so melee swings return mana to
 -- you, and optionally judges it once per mob (Judgement of Wisdom) so the whole
 -- group gets mana back. Only worthwhile in melee on an attackable mob. Heals
 -- always preempt this above, so it never runs while anyone needs healing - but
 -- the group judge still spends a GCD, hence it is opt-in.
+-- Keep Seal of Wisdom up. A SELF BUFF: it needs no target, no enemy and no
+-- melee range - it needs a global cooldown and nothing else.
+--
+-- It used to sit behind all three of those checks, and behind the rotation's
+-- "no attackable target, stop here" guard on top, so a healer standing back
+-- with nothing targeted never refreshed it at all. That is the reported "Seal of
+-- Wisdom uptime is pretty bad sometimes": not a priority problem, a requirement
+-- that was never true for the thing it guarded.
+function M:HealSealUp(cfg)
+    if not cfg.healManaSelf then return false end
+    if not self:KnowsSpell("Seal of Wisdom") then return false end
+    if self:HasBuff("Seal of Wisdom") then return false end
+    if not self:Affordable("Seal of Wisdom") then return false end
+    return self:Pick("Seal of Wisdom", "self mana")
+end
+
+-- Stamp Judgement of Wisdom on the mob, so the whole group gets mana back. This
+-- one really does need a target in melee range, and the seal on you to judge.
 function M:HealSeals(cfg)
-    if not (cfg.healManaSelf or cfg.healManaJudge) then return false end
+    if not cfg.healManaJudge then return false end
     if not self:KnowsSpell("Seal of Wisdom") then return false end
     if not (UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")) then return false end
     if not self:InMeleeRange() then return false end
-    -- Seal of Wisdom must be up (both the self-mana and the judge need it).
-    if not self:HasBuff("Seal of Wisdom") then return self:Pick("Seal of Wisdom", "self mana") end
-    -- Stamp Judgement of Wisdom on the mob once, if the group judge is enabled.
+    if not self:HasBuff("Seal of Wisdom") then return false end
     if cfg.healManaJudge and self:KnowsSpell("Judgement") and self:IsReady("Judgement")
         and not self:DebuffEffectivelyUp("Seal of Wisdom") then
+        if not self:Affordable("Judgement") then return false end
         return self:Pick("Judgement", "judge the seal")
+    end
+    return false
+end
+
+-- Pre-load the Holy Judgement buff during a lull, so the next Holy Light casts
+-- in 1.5s instead of 2.5s.
+--
+-- The timing is the whole point, and it is why this belongs in the lull and
+-- nowhere else. Judging in ORDER to speed up a heal that is already due is a net
+-- loss: the judgement costs a global cooldown, so 1.5s + 1.5s is slower than
+-- simply casting the 2.5s Holy Light. Cast while nobody needs healing, the
+-- global cooldown was free anyway and the next emergency lands a second sooner.
+--
+-- Often redundant, deliberately so: HealSeals above already casts Judgement when
+-- the group-mana judge is enabled and the debuff is missing, and that cast grants
+-- this buff for free. This step only earns its place when that one is switched
+-- off, or when the debuff is already stamped and the buff has since been spent.
+function M:HealJudgeBuff(cfg)
+    if not cfg.healJudgeHL then return false end
+    if not self:KnowsSpell("Judgement") then return false end
+    if not self:KnowsSpell("Holy Light") then return false end
+    if self:HasBuff("Holy Judgement") then return false end
+    if not self:IsReady("Judgement") then return false end
+    if not (UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")) then return false end
+    if not self:InMeleeRange() then return false end
+    if not self:Affordable("Judgement") then return false end
+    return self:Pick("Judgement", "pre-load Holy Judgement")
+end
+
+-- Holy Strike triggers on how many people are hurt, not on whether anybody is
+-- hurt ENOUGH to warrant a direct heal.
+--
+-- This is the correction the reports kept pointing at from both ends. Holy
+-- Strike is a splash heal, so its worth is a headcount: three people at 93% are
+-- worth more than a Flash of Light on one of them, and none of them is hurt
+-- enough for the heal threshold to notice. It used to sit below the heal gate,
+-- where it only ever ran when NOBODY needed healing - fine while levelling,
+-- where that is most of the time, and useless in a dungeon taking steady damage,
+-- which is exactly the split the two play reports described.
+--
+-- Deliberately no mana floor. Ours had one at 40%, which switched off a
+-- mana-RETURNING ability precisely when mana ran short.
+function M:HolyStrikeDue(cfg)
+    if not cfg.healSplashHS then return false end
+    if not self:KnowsSpell("Holy Strike") then return false end
+    if not self:IsReady("Holy Strike") then return false end
+    if not self:HealMeleeReady(cfg) then return false end
+    local thr = (cfg.hsMinHP or 100) / 100
+    local units = self:GroupUnits()
+    local n = 0
+    for i = 1, table.getn(units) do
+        local u = units[i]
+        if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
+            and UnitIsFriend("player", u) and UnitHealthMax(u) > 0
+            -- 10 yards, via CheckInteractDistance(unit, 3). Holy Strike's splash
+            -- does not reach further.
+            --
+            -- YOURSELF exempt from the distance test: CheckInteractDistance is
+            -- an interaction range to ANOTHER unit and gives no useful answer
+            -- about the player. Counted through it, the paladin standing in the
+            -- middle of his own splash was left out of his own headcount - one
+            -- short of a threshold of three, every time. The same exemption
+            -- Reachable already makes for the heal itself.
+            and (UnitIsUnit(u, "player") or CheckInteractDistance(u, 3)) then
+            if UnitHealth(u) / UnitHealthMax(u) <= thr then n = n + 1 end
+        end
+    end
+    return n >= (cfg.hsMinTargets or 1)
+end
+
+-- Last resort: stop everything and become invulnerable.
+--
+-- Above every other step in the rotation, healing included, because a heal that
+-- is still casting when you die was not worth starting. Divine Shield first,
+-- Divine Protection as the fallback for a paladin who has not learned it yet -
+-- both are instant and neither costs a global cooldown worth worrying about.
+--
+-- Skipped while one is already up, and while Forbearance blocks a new one: the
+-- cast would fail and the press would be spent on nothing.
+function M:PanicShield(cfg)
+    if (cfg.panicPct or 0) <= 0 then return false end
+    local mx = UnitHealthMax("player")
+    if not mx or mx <= 0 then return false end
+    if (UnitHealth("player") / mx) > (cfg.panicPct / 100) then return false end
+    if self:SelfInvulnerable() then return false end
+    if self:HasBuff("Forbearance") then return false end
+    if self:KnowsSpell("Divine Shield") and self:OwnCDReady("Divine Shield")
+        and self:Affordable("Divine Shield") then
+        return self:Pick("Divine Shield", "emergency")
+    end
+    if self:KnowsSpell("Divine Protection") and self:OwnCDReady("Divine Protection")
+        and self:Affordable("Divine Protection") then
+        return self:Pick("Divine Protection", "emergency")
     end
     return false
 end
@@ -1088,11 +1866,83 @@ end
 function M:Rotate(cfg)
     self:UpdateManagement(cfg)
 
+    -- Before anything else, in both modes.
+    if self:PanicShield(cfg) then return end
+
+    -- Heal-mode trace. It has to sit HERE, above the heal branches, because every
+    -- one of them returns - the strike/seal trace further down is unreachable for
+    -- a paladin who is actually healing, which is why a healer produced no trace
+    -- at all and every report about the heal path had to be argued from theory.
+    --
+    -- Reads only. The gate conditions are printed as their raw INPUTS (melee,
+    -- mana, the switches) and never by calling HealStrikeEngine / HolyStrikeDue
+    -- / HealSeals, which cast when they return true.
+    --
+    -- The two ranks shown are picked against the RAW deficit, not against the
+    -- padded one DoHeal uses (combat compensation, healing-reduction debuffs), so
+    -- a rank here can legitimately be one below what actually goes out. Printing
+    -- the input is the point: it is the number to compare against the character
+    -- sheet when overhealing is being investigated.
+    if cfg.healMode and self:Tracing() then
+        local ratio = (cfg.healThreshold or 75) / 100
+        local u, def, pct = self:WorstHurt(ratio, cfg)
+        local mana = UnitMana("player")
+        local maxm = UnitManaMax("player")
+        local hp = (cfg.healPower and cfg.healPower > 0) and cfg.healPower or self:GearHealBonus()
+        -- The SAME call DoHeal makes, so the log cannot describe a rule other
+        -- than the one that picks. The only difference is the deficit: raw here,
+        -- healing-debuff-adjusted there, which is noted on the line itself.
+        local hlFast = self:BuffTextureUp(FORCE_HL_TEX) or self:HasBuff("Holy Judgement")
+        local qhPick
+        if u then qhPick = self:CascadePick(cfg, def, pct, mana, hlFast) end
+        local emg = (u and pct <= (cfg.holyShockPct or 50) / 100) and "Y" or "N"
+        local pend = u and self:PendingFor(u) or 0
+        -- ONE argument, not two. Aegis_SBR:Trace writes only its FIRST argument to
+        -- the press log, and the second half - ranks, +healing, the gate inputs -
+        -- is exactly what has to be readable off disk when a tester sends their
+        -- SavedVariables in. A long wrapped chat line is the cheaper price.
+        self:Trace(
+            "heal unit=" .. (u and (UnitName(u) or u) or "-")
+                .. " pct=" .. (pct and string.format("%.0f%%", pct * 100) or "-")
+                .. " def=" .. (u and string.format("%.0f", def) or "-")
+                .. " pend=" .. string.format("%.0f", pend)
+                .. " thr=" .. (cfg.healThreshold or 75)
+                .. " emg=" .. emg .. "/" .. (cfg.holyShockPct or 50)
+                .. " gcd=" .. (self:GcdReady() and "Y" or "N")
+                .. " cast=" .. (self:StillCasting() and "Y" or "N")
+                .. " hold=" .. ((self.healUntil and GetTime() < self.healUntil)
+                    and string.format("%.1fs", self.healUntil - GetTime()) or "-")
+                .. "  pick=" .. (qhPick or "-")
+                .. " healthy=" .. (cfg.ratioHealthy or 10) .. "%"
+                .. " +heal=" .. hp .. (((cfg.healPower or 0) > 0) and "(manual)" or "(gear)")
+                .. " mana=" .. mana .. "/" .. (maxm or 0)
+                .. " melee=" .. (self:InMeleeRange() and "Y" or "N")
+                .. " hs(" .. (self:KnowsSpell("Holy Shock") and "k" or "-")
+                .. "," .. (self:OwnCDReady("Holy Shock") and "rdy" or "cd") .. ")"
+                .. " splash=" .. (cfg.healSplashHS and "on" or "off")
+                .. "/" .. (cfg.hsMinTargets or 1) .. "@" .. (cfg.hsMinHP or 100) .. "%"
+                .. " hsDue=" .. (self:HolyStrikeDue(cfg) and "Y" or "N")
+                .. " reload=" .. (cfg.healReloadCS and "on" or "off")
+                .. " seal=" .. (cfg.healManaSelf and "self" or "-")
+                .. "/" .. (cfg.healManaJudge and "judge" or "-")
+                .. (cfg.healAggro and (" danger=" .. (u and (self:InDanger(u) and "Y" or "n") or "-")
+                    .. "/" .. (u and self:AggroCount(u) or 0)) or "")
+                .. " hj=" .. (hlFast and "up" or "-")
+                .. (cfg.healJudgeHL and "/pre" or ""))
+    end
+
     -- Heal mode, melee-holy: the Blessed Strikes engine reloads Holy Shock
     -- between heals (never over an emergency), then group healing preempts the
     -- attack rotation, so a judgement or strike GCD never delays a needed heal.
-    if cfg.healMode and self:HealStrikeEngine(cfg) then return end
+    -- HEALING FIRST. Everything else in heal mode is an optimisation of the
+    -- quiet moments, and every one of them used to run above the heal: the
+    -- Crusader Strike reload, then the Holy Strike splash. Reported from play as
+    -- a rotation that strikes while a heal is wanted.
     if cfg.healMode and self:DoHeal(cfg) then return end
+
+    -- Seal of Wisdom, above the "needs an enemy" guard below: it is a self buff,
+    -- and it is what pays for the next heal.
+    if cfg.healMode and self:HealSealUp(cfg) then return end
 
     -- Heal mode works at range with no target; everything below needs an
     -- attackable target, so stop here when there is none.
@@ -1105,9 +1955,27 @@ function M:Rotate(cfg)
     -- hurt, strike with the heal policy (Holy Strike splash) before the
     -- generic damage rotation below.
     if cfg.healMode then
-        if self:HealDemand(cfg) then return end
-        if self:HealWeaveStrike(cfg) then return end
+        -- Holy Strike, the splash heal - but never over somebody in real danger,
+        -- who needs a cast aimed at them rather than an area effect.
+        local _, _, worst = self:WorstHurt((cfg.healThreshold or 75) / 100)
+        if not (worst and worst <= (cfg.holyShockPct or 50) / 100) then
+            if self:HolyStrikeDue(cfg) then
+                if self:CastStrike("Holy Strike", cfg) then return end
+            end
+        end
+
+        -- Seal upkeep ABOVE the two fillers below it. Seal of Wisdom is what
+        -- pays for the next heal, so it cannot sit behind a Crusader Strike that
+        -- exists only to shorten a cooldown. Reported as "Holy Strike is being
+        -- done without Seal of Wisdom".
         if self:HealSeals(cfg) then return end
+        -- Last of the lull steps: it applies nothing and heals nobody, it only
+        -- makes the NEXT heal faster, so it takes a global cooldown none of the
+        -- above wanted.
+        -- Reload Holy Shock last of the strike-shaped steps: it applies nothing
+        -- and heals nobody, it only shortens a cooldown.
+        if self:HealStrikeEngine(cfg) then return end
+        if self:HealJudgeBuff(cfg) then return end
     end
 
     if self:Tracing() then
@@ -1134,6 +2002,9 @@ function M:Rotate(cfg)
                 .. " lean=" .. (self:AutoLeansHoly() and "holy" or "crusader")
                 .. " oh=" .. (self:HasOffhand() and "Y" or "N")
                 .. " dr=" .. (cfg.strikeDownrank and "on" or "off")
+                .. " afford=" .. (self:Affordable("Judgement") and "J" or "-")
+                .. ((self:KnowsSpell("Crusader Strike") and self:Affordable("Crusader Strike")) and "C" or "-")
+                .. ((self:KnowsSpell("Holy Strike") and self:Affordable("Holy Strike")) and "H" or "-")
                 .. " mana=" .. UnitMana("player")
                 .. " veng=" .. self:TalentRank(TALENT_HOLY_MIGHT)
                 .. " rght=" .. self:TalentRank(TALENT_THREAT))
@@ -1151,7 +2022,7 @@ function M:Rotate(cfg)
     end
 
     -- 1. Strike (damage/tank mode only; heal mode has its own strike weaving,
-    -- HealStrikeEngine/HealWeaveStrike, above)
+    -- HealStrikeEngine/HolyStrikeDue, above)
     if not cfg.healMode and self:StrikeEnabled(cfg) and self:SharedStrikeReady(cfg) then
         local pick = self:ResolveSharedCD(cfg)
         if pick and self:CastStrike(pick, cfg) then return end
@@ -1265,7 +2136,79 @@ end
 -- ============================================================
 -- Class specific slash subcommands, dispatched from the core
 -- ============================================================
+-- Priority list management. Names, not units: a raid slot changes between
+-- pulls, a name does not.
+function M:PrioAdd(cfg, name)
+    if not name or name == "" then return false end
+    if type(cfg.healPrioList) ~= "table" then cfg.healPrioList = {} end
+    for i = 1, table.getn(cfg.healPrioList) do
+        if cfg.healPrioList[i] == name then return false end
+    end
+    table.insert(cfg.healPrioList, name)
+    return true
+end
+
+function M:PrioRemove(cfg, idx)
+    if type(cfg.healPrioList) ~= "table" then return false end
+    if not cfg.healPrioList[idx] then return false end
+    table.remove(cfg.healPrioList, idx)
+    return true
+end
+
+-- One switch between the two playstyles: it drives the healthy ratio to 100 or
+-- to 0 and calls the ends "High HPS" and "Normal HPS". At 100 no target ever
+-- counts as healthy, so Holy Light is never used; at 0 every target does, so
+-- Holy Light is used whenever it is the bigger heal. Deliberately no second code
+-- path - the same ladder serves both ends.
+function M:ToggleHPS(cfg)
+    -- 0 = nobody is ever "hurt enough", so Holy Light is never used: the fast
+    -- heal carries everything. 100 = everybody is, so Holy Light is used
+    -- whenever no Flash of Light can cover the need.
+    if (cfg.ratioHealthy or 60) <= 0 then
+        cfg.ratioHealthy = 100
+        return "normal"
+    end
+    cfg.ratioHealthy = 0
+    return "high"
+end
+
 function M:HandleCommand(cmd, t)
+    if cmd == "hps" then
+        local cfg = Aegis_SBR:GetActiveProfile()
+        if not cfg then return true end
+        local mode = self:ToggleHPS(cfg)
+        if mode == "high" then
+            msgOut("High HPS: Flash of Light only, Holy Light never (except with Holy Judgement).")
+        else
+            msgOut("Normal HPS: Holy Light whenever it is the bigger heal.")
+        end
+        return true
+    end
+    if cmd == "prio" then
+        local cfg = Aegis_SBR:GetActiveProfile()
+        if not cfg then return true end
+        local a = string.lower(t[2] or "")
+        if a == "add" then
+            local nm = (t[3] and t[3] ~= "") and t[3] or UnitName("target")
+            if self:PrioAdd(cfg, nm) then msgOut("priority: added " .. (nm or "?") .. ".")
+            else msgOut("priority: nothing added (no target, or already listed).", 1, 0.5, 0.3) end
+        elseif a == "del" or a == "remove" then
+            if self:PrioRemove(cfg, tonumber(t[3])) then msgOut("priority: removed.")
+            else msgOut("usage: /sbr prio del <number>", 1, 0.5, 0.3) end
+        elseif a == "clear" then
+            cfg.healPrioList = {}; msgOut("priority list cleared.")
+        elseif a == "on" or a == "off" then
+            cfg.healPrio = (a == "on"); msgOut("heal priority " .. a .. ".")
+        else
+            local l = cfg.healPrioList or {}
+            msgOut("heal priority " .. (cfg.healPrio and "on" or "off")
+                .. " - /sbr prio add|del <n>|clear|on|off")
+            for i = 1, table.getn(l) do
+                DEFAULT_CHAT_FRAME:AddMessage("  " .. i .. ". " .. l[i], 0.8, 0.85, 1)
+            end
+        end
+        return true
+    end
     if cmd == "seal"   then self:CmdSeal(t[2], string.lower(t[3] or ""), t[4]); return true end
     if cmd == "spell"  then self:CmdSpell(t[2], t[3], t[4]); return true end
     if cmd == "aoe"    then self:CmdAoe(); return true end
@@ -1310,10 +2253,141 @@ end
 -- Talent cache invalidation. Cleared at login and whenever talent points
 -- change, so TalentRank() re-reads fresh data on its next call.
 -- ============================================================
+-- ============================================================
+-- Landed-heal probe (log only, off unless /sbr log on)
+-- ============================================================
+-- Pairs what the module PREDICTED with what the server actually healed for, so
+-- the heal model can be checked against Turtle instead of assumed.
+--
+-- The model is base heal + coefficient * +healing, with the coefficient taken
+-- from the spell's base cast time (1.5/3.5 for Flash of Light, 2.5/3.5 for Holy
+-- Light) - vanilla's rule. Turtle is free to have changed any part of that, and
+-- nothing in the addon would notice: a wrong coefficient or a mis-scanned gear
+-- bonus both show up only as picking the wrong rank, which is exactly the
+-- overhealing that was reported.
+--
+-- A crit is flagged rather than filtered. It is ~1.5x and would otherwise read
+-- as the model underestimating by half.
+--
+-- prediction comes from CommitHeal's stored value; it is the amount for the
+-- cast that just resolved, since a heal cannot land before it is committed.
+local healLogFrame = CreateFrame("Frame")
+healLogFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_BUFF")
+healLogFrame:SetScript("OnEvent", function()
+    if not Aegis_SBR.logging then return end
+    if not arg1 then return end
+    local crit = false
+    local _, _, spell, who, amt = string.find(arg1, "^Your (.+) critically heals (.+) for (%d+)")
+    if spell then
+        crit = true
+    else
+        _, _, spell, who, amt = string.find(arg1, "^Your (.+) heals (.+) for (%d+)")
+    end
+    if not spell then return end
+    -- The combat log calls the player "you", never by name, so a self-heal never
+    -- matched the stored target and every one of them logged pred=- . That threw
+    -- away exactly the samples the model check needs most: 100 of the landed
+    -- heals in the first capture were self-heals, all unpairable.
+    if who == "you" or who == "You" then who = UnitName("player") or who end
+    local pred = (M.healTarget == who) and M.healAmount or nil
+    Aegis_SBR:LogWrite(string.format("heal-land %s on %s amount=%s%s pred=%s",
+        spell, who, amt, crit and " CRIT" or "",
+        pred and string.format("%.0f", pred) or "-"))
+end)
+
 local talentFrame = CreateFrame("Frame")
 talentFrame:RegisterEvent("PLAYER_LOGIN")
 talentFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 talentFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")
 talentFrame:SetScript("OnEvent", function()
     M.talentCache = nil
+end)
+
+-- ============================================================
+-- Overheal cancel
+-- ============================================================
+-- Stops a heal already in flight once too much of it has become waste - someone
+-- else landed a heal first, or the target simply stopped taking damage. The cast
+-- is abandoned rather than finished, and the mana with it.
+--
+-- Off unless a threshold is set, because a cancelled cast is visible and
+-- surprising: the cast bar vanishes mid-way and nothing happens. The delay
+-- exists for the same reason - it stops a cast being cut the instant it starts.
+--
+-- Cancelling also clears the in-flight prediction. Leaving it would be worse
+-- than not cancelling at all: the target would go on looking healthier than they
+-- are for the rest of the committed window.
+-- ============================================================
+-- How much MORE wasteful a heal has to have become, in percentage points, before
+-- the cancel is allowed to fire.
+local WASTE_GROWTH = 10
+
+local overhealFrame = CreateFrame("Frame")
+overhealFrame:SetScript("OnUpdate", function()
+    if Aegis_SBR.active ~= M then return end
+    if not M.castingUntil or GetTime() >= M.castingUntil then return end
+    if not M.healUnit or not M.healAmount or M.healAmount <= 0 then return end
+    local cfg = Aegis_SBR:GetActiveProfile()
+    if not cfg or not cfg.healMode then return end
+    local thr = cfg.overhealCancel or 0
+    if thr <= 0 then return end
+    if (GetTime() - (M.healStart or 0)) < (cfg.overhealCancelDelay or 0) then return end
+    local u = M.healUnit
+    if not UnitExists(u) or UnitIsDeadOrGhost(u) then return end
+    local mx = UnitHealthMax(u)
+    if not mx or mx <= 0 then return end
+    local need = mx - (UnitHealth(u) + M:IncomingHeal(u))
+    if need < 0 then need = 0 end
+    local waste = (M.healAmount - need) / M.healAmount * 100
+    -- Two conditions, and the second one is what stops this from being a loop.
+    --
+    -- Cancelling exists for the situation CHANGING mid-cast: another healer
+    -- landed one first, or the target stopped taking damage. It must never fire
+    -- on a heal that was already this wasteful when the rotation chose it -
+    -- there the cancel simply repeals the decision, the next press makes the
+    -- same choice, and the pair repeats forever. From the outside that looks
+    -- like a rotation doing nothing at all, right up until an INSTANT heal comes
+    -- off cooldown and slips through because it finishes before this can fire.
+    -- (Reported exactly that way: "doing nothing until Holy Shock was ready".)
+    --
+    -- If a heal is too wasteful to be worth starting, that is a job for the
+    -- selection - a threshold, not a cancel.
+    if waste >= thr and waste > (M.healWaste0 or 0) + WASTE_GROWTH then
+        SpellStopCasting()
+        if Aegis_SBR.logging then
+            Aegis_SBR:LogWrite(string.format("heal-cancel on %s waste=%.0f%% (was %.0f%%)",
+                UnitName(u) or "?", waste, M.healWaste0 or 0))
+        end
+        M.castingUntil = nil
+        M.healUntil = nil
+        M.healTarget = nil
+        M.healUnit = nil
+        M.healAmount = 0
+    end
+end)
+
+-- ============================================================
+-- End of cast
+-- ============================================================
+-- The client says when a cast stops, whether it finished, failed or was
+-- interrupted - so the commitment is cleared on evidence instead of on a timer.
+-- Without this, StillCasting has to fall back on a guess, and every guess is
+-- wrong in one of two directions: too short clips a cast that was merely queued,
+-- too long freezes the rotation after a cast the client refused outright.
+local castEndFrame = CreateFrame("Frame")
+castEndFrame:RegisterEvent("SPELLCAST_STOP")
+castEndFrame:RegisterEvent("SPELLCAST_FAILED")
+castEndFrame:RegisterEvent("SPELLCAST_INTERRUPTED")
+castEndFrame:SetScript("OnEvent", function()
+    M.castingUntil = nil
+    -- A cast that FAILED or was interrupted never landed, so the healing it
+    -- promised must stop counting too - otherwise the target goes on looking
+    -- healthier than it is for the rest of the committed window and nobody
+    -- heals it.
+    if event ~= "SPELLCAST_STOP" then
+        M.healUntil = nil
+        M.healTarget = nil
+        M.healUnit = nil
+        M.healAmount = 0
+    end
 end)

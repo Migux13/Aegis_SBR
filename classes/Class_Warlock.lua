@@ -124,9 +124,45 @@ end)
 -- so ApplyDot retries on the very next press instead of blanking out the
 -- full interval on a cast that never happened. Requires SpellInfo (spell id
 -- -> name) to resolve which of our pending DoTs the event is about.
+--
+-- A RESIST is not a cast failure and never shows up here: the cast completes,
+-- the spell is thrown away on landing. UNIT_CASTEVENT reports CAST, the throttle
+-- is stamped as though the DoT were up, and every press for the next interval
+-- reads "missing but recently cast" and answers "wait" - the rotation visibly
+-- stalls for a couple of seconds on a DoT that was never applied. The combat log
+-- is the only place that knows, so it is read below.
 local wlCastEventFrame = CreateFrame("Frame")
 wlCastEventFrame:RegisterEvent("UNIT_CASTEVENT")
+-- "Your Corruption was resisted by X." - see the resist branch at the bottom.
+wlCastEventFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
 wlCastEventFrame:SetScript("OnEvent", function()
+    if event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
+        -- A resisted or missed DoT never landed, so both the confirmation stamp
+        -- and any pending mark are wrong and are cleared: the next press applies
+        -- it again immediately instead of waiting out the interval.
+        --
+        -- Deliberately NOT "immune". An immune target would turn an immediate
+        -- retry into a loop, and the interval that suppresses it there is doing
+        -- its job. Only genuinely wasted casts are unblocked here.
+        if not arg1 then return end
+        if not (string.find(arg1, "resist") or string.find(arg1, "miss")) then return end
+        for name in pairs(M.dotTex) do
+            if string.find(arg1, name, 1, true) then
+                M.dotThrottle[name] = nil
+                M.dotPending[name] = nil
+                return
+            end
+        end
+        for i = 1, table.getn(M.CURSES) do
+            local name = M.CURSES[i]
+            if string.find(arg1, name, 1, true) then
+                M.dotThrottle[name] = nil
+                M.dotPending[name] = nil
+                return
+            end
+        end
+        return
+    end
     if event ~= "UNIT_CASTEVENT" or not SpellInfo then return end
     if not M.playerGUID then
         local _, guid = UnitExists("player")

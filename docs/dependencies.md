@@ -170,9 +170,8 @@ of the current cast fires the instant it's legal.
   `BUFF_REMOVED_SELF`, `BUFF_UPDATE_DURATION_SELF`), `AURA_CAST_ON_SELF/OTHER` (includes an
   aura-cap bitfield for the 32-buff/16-debuff slots — useful for the buff-cap-safety idea).
 
-**Gotcha:** queueing can conflict with other addons that manage casting (QuickHeal/Healbot/
-Quiver historically). Aegis IS a casting manager — if a specific interaction misbehaves,
-suspect queue timing first.
+**Gotcha:** queueing can conflict with any other addon that manages casting. Aegis IS a
+casting manager — if a specific interaction misbehaves, suspect queue timing first.
 
 ---
 

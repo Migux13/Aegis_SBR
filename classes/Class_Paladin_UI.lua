@@ -85,20 +85,117 @@ function M:BuildBody(ui, parent)
     self.hpHighRow = L:Row{ label = "Back above",
         slider = { key = "hpHigh", min = 0, max = 100, step = 5, suffix = "%", onChange = set("hpHigh") } }
 
+    -- Every section below is tagged "heal". They were untagged when first added
+    -- and therefore showed up on the Tank/Damage tab as well, which is exactly
+    -- the noise the tab rail exists to prevent.
     L:Header("Healing", "heal")
+    self.panicRow = L:Row{ label = "Emergency bubble below",
+        slider = { key = "panicPct", min = 0, max = 60, step = 5, suffix = "%", onChange = set("panicPct") } }
     self.healAtRow = L:Row{ label = "Heal members below",
         slider = { key = "healThreshold", min = 0, max = 100, step = 5, suffix = "%", onChange = set("healThreshold") } }
+    self.selfRow = L:Row{ label = "Heal yourself below",
+        slider = { key = "healSelfPct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("healSelfPct") } }
+    -- The one knob that decides Flash of Light against Holy Light, and the
+    -- button that drives it to either end.
+    self.ratioHealthyRow = L:Row{ label = "Holy Light below",
+        slider = { key = "ratioHealthy", min = 0, max = 100, step = 5, suffix = "%", onChange = set("ratioHealthy") } }
+    self.hpsBtn = L:Button{ label = "Toggle HPS mode", onClick = function()
+        if ui.buf then M:ToggleHPS(ui.buf); ui:Refresh() end
+    end }
+
+    L:Header("Ranks", "heal")
+    self.folMaxRow = L:Row{ label = "Flash of Light max rank",
+        slider = { key = "folMaxRank", min = 1, max = 7, step = 1, suffix = "", onChange = set("folMaxRank") } }
+    self.folMinRow = L:Row{ label = "Flash of Light min rank",
+        slider = { key = "folMinRank", min = 1, max = 7, step = 1, suffix = "", onChange = set("folMinRank") } }
+    self.hlMaxRow = L:Row{ label = "Holy Light max rank",
+        slider = { key = "hlMaxRank", min = 1, max = 9, step = 1, suffix = "", onChange = set("hlMaxRank") } }
+    self.hlMinRow = L:Row{ label = "Holy Light min rank",
+        slider = { key = "hlMinRank", min = 1, max = 9, step = 1, suffix = "", onChange = set("hlMinRank") } }
+
+    L:Header("Overheal", "heal")
+    self.ohRow = L:Row{ label = "Cancel cast at",
+        slider = { key = "overhealCancel", min = 0, max = 100, step = 5, suffix = "%", onChange = set("overhealCancel") } }
+    self.ohDelayRow = L:Row{ label = "not before",
+        slider = { key = "overhealCancelDelay", min = 0, max = 2, step = 0.5, suffix = "s", onChange = set("overhealCancelDelay") } }
+
+    L:Header("Holy Shock", "heal")
     self.holyShockRow = L:Row{ key = "useHolyShock", label = "Holy Shock emergencies", spell = "Holy Shock", onToggle = set("useHolyShock"),
         slider = { key = "holyShockPct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("holyShockPct") } }
-    self.holyLightRow = L:Row{ label = "Holy Light only below",
-        slider = { key = "holyLightPct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("holyLightPct") } }
-    self.healReloadRow = L:Row{ key = "healReloadCS", label = "Reload Holy Shock (CS)", onToggle = set("healReloadCS") }
-    self.healSplashRow = L:Row{ key = "healSplashHS", label = "Holy Strike filler", onToggle = set("healSplashHS"),
-        slider = { key = "healWeaveManaFloor", min = 0, max = 90, step = 5, suffix = "%", onChange = set("healWeaveManaFloor") } }
+    self.healReloadRow = L:Row{ key = "healReloadCS", label = "Reload with Crusader Strike", onToggle = set("healReloadCS") }
+
+    -- Holy Strike: the switch and its two thresholds together. The switch used
+    -- to sit three sections further down, away from the numbers governing it.
+    L:Header("Holy Strike", "heal")
+    self.healSplashRow = L:Row{ key = "healSplashHS", label = "Use Holy Strike", onToggle = set("healSplashHS") }
+    self.hsMinHPRow = L:Row{ label = "Group member below",
+        slider = { key = "hsMinHP", min = 50, max = 100, step = 1, suffix = "%", onChange = set("hsMinHP") } }
+    self.hsMinTargetsRow = L:Row{ label = "and at least this many",
+        slider = { key = "hsMinTargets", min = 1, max = 5, step = 1, suffix = "", onChange = set("hsMinTargets") } }
+
+    -- The switches that reorder the queue, cheapest to explain first. "Use
+    -- priority list" sits LAST because the block it unfolds docks directly
+    -- beneath it: a switch and the thing it reveals belong next to each other,
+    -- not with three unrelated rows in between.
+    L:Header("Heal priority", "heal")
+    self.prioTargetRow = L:Row{ key = "healPrioTarget", label = "Your target first", onToggle = set("healPrioTarget") }
+    self.aggroRow = L:Row{ key = "healAggro", label = "Prefer who is under attack", onToggle = set("healAggro") }
+    self.precastRow = L:Row{ key = "healPrecast", label = "Pre-heal who has aggro", onToggle = set("healPrecast") }
+    self.petPrioRow = L:Row{ label = "Pet priority",
+        slider = { key = "petPriority", min = 0, max = 2, step = 1, suffix = "", onChange = set("petPriority") } }
+    self.prioRow = L:Row{ key = "healPrio", label = "Use priority list", onToggle = set("healPrio") }
+
+    -- Seven rows, every one of them meaningless while the switch above is off -
+    -- so they only exist while it is on.
+    L:Header("Priority list", "heal", function()
+        return ui.buf and ui.buf.healPrio and true or false
+    end)
+    self.prioAddBtn = L:Button{ label = "Add target", onClick = function()
+        if ui.buf then M:PrioAdd(ui.buf, UnitName("target")); ui:Refresh() end
+    end }
+    self.prioClearBtn = L:Button{ label = "Clear", onClick = function()
+        if ui.buf then ui.buf.healPrioList = {}; ui:Refresh() end
+    end }
+    -- Five slots is a party plus one; a raid MT/OT pair fits in the top two,
+    -- which are the only positions that carry their own handicap anyway.
+    self.prioBtns = {}
+    for i = 1, 5 do
+        local idx = i
+        self.prioBtns[idx] = L:Button{ label = idx .. ".", onClick = function()
+            if ui.buf then M:PrioRemove(ui.buf, idx); ui:Refresh() end
+        end }
+    end
+
+    -- Raid settings get their own area rather than riding along with the
+    -- priority switches: subgroups are a raid concept and mean nothing in a
+    -- party, so they should not add a row to a five-man player's window.
+    --
+    -- The open/closed state is UI-only and deliberately NOT stored in the
+    -- profile: which blocks you have expanded is not a setting, and it has no
+    -- business in a saved profile or an export.
+    L:Header("Raid", "heal")
+    self.groupsBtn = L:Button{ label = "Subgroups", onClick = function()
+        M.groupsOpen = not M.groupsOpen
+        ui:Refresh()
+    end }
+
+    L:Header("Subgroups", "heal", function() return M.groupsOpen and true or false end)
+    self.groupBtns = {}
+    for i = 1, 8 do
+        local idx = i
+        self.groupBtns[idx] = L:Button{ label = "Group " .. idx, onClick = function()
+            if not ui.buf then return end
+            if type(ui.buf.raidGroupSkip) ~= "table" then ui.buf.raidGroupSkip = {} end
+            if ui.buf.raidGroupSkip[idx] then ui.buf.raidGroupSkip[idx] = nil
+            else ui.buf.raidGroupSkip[idx] = true end
+            ui:Refresh()
+        end }
+    end
 
     L:Header("Mana management", "heal")
     self.healManaSelfRow  = L:Row{ key = "healManaSelf",  label = "Seal of Wisdom (self mana)",  spell = "Seal of Wisdom", onToggle = set("healManaSelf") }
     self.healManaJudgeRow = L:Row{ key = "healManaJudge", label = "Judge Wisdom (group mana)",   spell = "Seal of Wisdom", onToggle = set("healManaJudge") }
+    self.healJudgeHLRow   = L:Row{ key = "healJudgeHL",   label = "Pre-load Holy Judgement",     spell = "Judgement", onToggle = set("healJudgeHL") }
 
     L:Finish()
 
@@ -109,7 +206,7 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.spellCB.hammerOfWrath.cb,  "Hammer of Wrath", "Execute, used only at or below 20 percent target HP.")
     ui:Tip(self.spellCB.repentance.cb,     "Repentance",      "Cast on cooldown as a damage proc on Turtle.")
     ui:Tip(self.spellCB.consecration.cb,   "Consecration (AoE)", "AoE filler, cast on cooldown. Manual toggle (also /sbr aoe), since 1.12 cannot count nearby enemies.", "Held during mana recovery unless the option below is on.")
-    ui:Tip(self.consecManaRow.cb, "Consecration also in mana recovery", "Keeps casting Consecration even while mana recovery is running, instead of holding it until mana is back up.", "Worth knowing: mana recovery LATCHES. It switches on below the 'Switch below' value and only off again at 'Back above', so with a wide band (60/90 on a tank, say) it can stay on for a whole fight with mana sitting comfortably in between - and Consecration stays silently suppressed the entire time. If yours seems off cooldown but never fires, this is why. For a tank the AoE threat usually beats the mana saved.")
+    ui:Tip(self.consecManaRow.cb, "Consecration also in mana recovery", "Keeps casting Consecration even while mana recovery is running, instead of holding it until mana is back up.", "Mana recovery LATCHES - on below 'Switch below', off only at 'Back above' - so with a wide band it can stay on all fight and keep Consecration suppressed. If yours never fires, this is why.")
     ui:Tip(self.spellCB.exorcism.cb,       "Exorcism",        "Strong nuke, used on cooldown but only against Undead and Demon targets.", "Held during mana recovery.")
     ui:Tip(self.spellCB.holyStrike.cb, "Holy Strike", "Shares the 6s strike cooldown with Crusader Strike.", "With Vengeful Strikes it grants Holy Might. Even untalented it returns mana and heals the group.")
     ui:Tip(self.spellCB.crusaderStrike.cb, "Crusader Strike", "Shares the 6s strike cooldown with Holy Strike.", "Builds Zeal. Tank: with Righteous Strikes it also loads the block buff Zealous Defense.")
@@ -123,17 +220,36 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.twistRow.cb, "Seal twisting (experimental)", "Holds the damage seal judge until just before the next swing.", "Needs a damage seal. Tune in game, timing depends on latency.")
     ui:Tip(self.wisdomRow.cb, "Wisdom debuff in mana mode", "During mana recovery, judge Seal of Wisdom onto the TARGET (Judgement of Wisdom) instead of your configured debuff.", "The target then returns mana to everyone attacking it, so the whole group recovers.")
 
+    ui:Tip(self.panicRow.slider, "Emergency bubble below", "Below this share of YOUR health, everything stops and Divine Shield goes up - Divine Protection if you have not learned it yet.", "0 is off, and off is the default: a five minute cooldown that also cuts your damage by 60% is not a decision to make for you. Skipped while Forbearance is on you, since the cast would only fail.")
     ui:Tip(self.healAtRow.slider, "Heal members below", "Members below this health get healed; the attack rotation yields while anyone is below it.", "Also /sbr healat <1-100>.")
     ui:Tip(self.holyShockRow.cb, "Holy Shock emergencies", "Use the instant Holy Shock for an emergency or a hurt unit out of melee range.")
     ui:Tip(self.holyShockRow.cb, "Holy Shock emergencies", "In heal mode Holy Shock is used ONLY as an instant heal, never for damage.", "Fires for an emergency or a hurt unit out of melee range, below the health value on the right.")
     ui:Tip(self.holyShockRow.slider, "Holy Shock below", "Health under which Holy Shock is used as an instant emergency heal.", "Below this same line, Flash of Light is also kept over Holy Light even for a big deficit - faster beats fuller when it's this close. Also /sbr hsat <1-100>. +healing auto-reads from gear; override with /sbr healpower <n>.")
-    ui:Tip(self.holyLightRow.slider, "Holy Light only below", "Reserve Holy Light for targets under this health percent. Above it, Flash of Light is used no matter how big the deficit is. 0 switches the restriction off.", "Off by default, because the heal choice is already made on efficiency: the smallest rank of each that covers the deficit is compared by what actually lands, and Flash of Light wins ties unless Holy Light wastes at least 10% less. That decides from the SIZE of the deficit though, so a high-health tank missing a lot in absolute terms can pull a Holy Light while still at a comfortable percentage. Set this if you would rather spam the cheap fast heal until someone is genuinely low.")
-    ui:Tip(self.healReloadRow.cb, "Reload Holy Shock (CS)", "When Holy Shock is on cooldown, use Crusader Strike to reset it (Blessed Strikes, auto-detected), keeping the emergency instant loaded.", "Uses a GCD, but never fires while anyone is below the Holy Shock line - the heal comes first. Not limited by the filler mana floor.")
-    ui:Tip(self.healSplashRow.cb, "Holy Strike filler", "In downtime with nobody to heal, use Holy Strike so its splash tops the melee group.", "Uses a GCD, and only above the mana value on the right, so filler never starves a heal.")
-    ui:Tip(self.healSplashRow.slider, "Filler mana floor", "Holy Strike filler only fires while your mana is above this.")
+    ui:Tip(self.healReloadRow.cb, "Reload with Crusader Strike", "When Holy Shock is on cooldown, use Crusader Strike to reset it (Blessed Strikes, auto-detected), keeping the emergency instant loaded.", "Uses a GCD, but never fires while anyone is below the Holy Shock line - the heal comes first. Not limited by the filler mana floor.")
+    ui:Tip(self.healSplashRow.cb, "Use Holy Strike", "Holy Strike splash-heals everyone near you, so it is used on a HEADCOUNT: enough people scratched, rather than one person hurt badly.", "Runs ahead of direct healing once the two thresholds below are met, but never while somebody is under the Holy Shock emergency line. No mana floor: it returns mana rather than costing it.")
 
+    ui:Tip(self.hsMinHPRow.slider, "Group member below", "Health at or under which a group member counts toward the Holy Strike trigger. 100% means anyone not at full health counts.", "These two RESTRICT Holy Strike. At the defaults it simply goes out on cooldown, which is what it is for - a damage ability whose splash heal is a bonus. Tighten them only if you want it held back.")
+    ui:Tip(self.hsMinTargetsRow.slider, "and at least this many", "How many group members within 10 yards must be under that health before Holy Strike is used. 1 means it is effectively unrestricted.", "Raise it in a raid, where a splash on three scratched people is worth more than a swing. It always yields to direct healing, and never fires while somebody is below the emergency line.")
+    ui:Tip(self.hpsBtn, "Toggle HPS mode", "Flips the slider above between its two ends, for switching playstyle in one click.", "High HPS (0%): Holy Light never used - the geared paladin who heals everything with Flash of Light. Normal HPS (100%): Holy Light whenever no Flash of Light can cover the deficit - the levelling paladin, for whom a Flash barely moves the bar.")
+    ui:Tip(self.folMaxRow.slider, "Flash of Light max rank", "Highest rank the downranking may reach for. Lower it to force cheaper, smaller heals.")
+    ui:Tip(self.folMinRow.slider, "Flash of Light min rank", "Lowest rank that may be chosen, whenever mana allows it. Raise it when the small ranks no longer move the bar.")
+    ui:Tip(self.hlMaxRow.slider, "Holy Light max rank", "Highest rank the downranking may reach for.")
+    ui:Tip(self.hlMinRow.slider, "Holy Light min rank", "Lowest rank that may be chosen, whenever mana allows it.")
+    ui:Tip(self.prioRow.cb, "Use priority list", "On a near tie, heal the listed players first: position 1 before position 2, both before anyone unlisted.", "A handicap, not a strict order: position 2 reads 20% healthier, unlisted players 35%. A dps at 20% still outranks a tank at 90%; a tank at 60% now beats a dps at 45%. Danger always reads real health.")
+    ui:Tip(self.precastRow.cb, "Pre-heal who has aggro", "Somebody a mob is attacking is worth topping off even while they are above the heal threshold.", "The damage is already coming; catching it early is cheaper than catching them after. Never fires on a unit at full health - there is nothing to heal.")
+    ui:Tip(self.petPrioRow.slider, "Pet priority", "0 never heal pets, 1 only when no player needs healing, 2 treat pets like players.", "A pet you have targeted is always considered, whatever this is set to.")
+    ui:Tip(self.ohRow.slider, "Cancel cast at", "Abandon a heal already in flight once this share of it would be pure overheal - somebody else healed first, or the target stopped taking damage.", "0 is off: a started cast always finishes. Cancelling is visible and surprising, so it is opt-in. The mana is saved either way.")
+    ui:Tip(self.ohDelayRow.slider, "not before", "Grace period before a cancel may fire, so a cast is never cut the instant it starts.")
+    ui:Tip(self.prioTargetRow.cb, "Your target first", "While you have a friendly target selected, it is treated as position 1 - ahead of the list.", "Selecting somebody is the clearest statement of intent there is, so it overrides the list rather than adding to it.")
+    ui:Tip(self.aggroRow.cb, "Prefer who is under attack", "A group member something is actually attacking outranks one who is merely sitting at a low bar.", "Aggro is read by chaining unit tokens: the mob a group member is fighting, and who that mob is hitting back. A member losing health also counts, which covers a mob nobody has targeted. It only ever pushes the SAFE down the order.")
+    ui:Tip(self.selfRow.slider, "Heal yourself below", "Your own health is only worth a cast below this. 0 treats you like any other group member.", "A healer has more ways out of trouble than anyone else - stepping out of a cleave is often enough - so 70% on yourself is rarely worth the cast that somebody else needs.")
+    ui:Tip(self.groupsBtn, "Subgroups", "Folds out a row per raid subgroup, each switching between healed and skipped.", "Only meaningful in a raid; a party has no subgroups. Folded away by default because eight rows is a lot of window for something most runs never touch. Whether it is folded is not saved - it is not a setting.")
+    ui:Tip(self.prioAddBtn, "Add target", "Adds your current target to the end of the priority list.", "Names, not raid slots, so the list survives a regroup. Typically the main tank first and yourself second.")
+    ui:Tip(self.prioClearBtn, "Clear", "Empties the priority list.")
+    ui:Tip(self.ratioHealthyRow.slider, "Holy Light below", "Holy Light is only used on a target under this health, and only when no Flash of Light is big enough to cover the deficit.", "60% is the recommended value. At 0 Holy Light is never used; at 100 it is used whenever the fast heal cannot cover the need. The Holy Judgement buff overrides it either way.")
     ui:Tip(self.healManaSelfRow.cb, "Seal of Wisdom (self mana)", "In melee downtime, keep Seal of Wisdom up so your own swings return mana to you.", "Only fires when nobody needs healing, so it never delays a heal.")
     ui:Tip(self.healManaJudgeRow.cb, "Judge Wisdom (group mana)", "Also judge Seal of Wisdom onto the mob (Judgement of Wisdom), so everyone attacking it gets mana back.", "Judgement uses a GCD and you cannot heal during that global, so it only fires when nobody needs healing.")
+    ui:Tip(self.healJudgeHLRow.cb, "Pre-load Holy Judgement", "With the Holy Judgement talent, casting Judgement makes your NEXT Holy Light one second faster. This casts it during downtime so the speed-up is already banked when the next big heal is needed.", "Downtime only. Judging to speed up a heal already due would cost a global cooldown: 1.5s + 1.5s is slower than the plain 2.5s heal. 'Judge Wisdom' above grants the same buff anyway.")
 end
 
 -- ============================================================
@@ -252,10 +368,6 @@ function M:RefreshBody(ui, buf)
     self.holyShockRow.slider:SetValue(buf.holyShockPct or 50); self.holyShockRow.slider.valText:SetText((buf.holyShockPct or 50) .. "%")
     -- 0 means "no restriction" and must survive: an `or` fallback would turn a
     -- deliberate 0 into whatever default sat on the right of it.
-    local hlp = buf.holyLightPct
-    if hlp == nil then hlp = 0 end
-    self.holyLightRow.slider:SetValue(hlp)
-    self.holyLightRow.slider.valText:SetText(hlp == 0 and "off" or (hlp .. "%"))
     -- The heal controls live in the heal-only "Healing" card, which the tab rail
     -- hides entirely on the Damage tab, so no mode gating is needed here.
     if not hsKnown then
@@ -267,24 +379,95 @@ function M:RefreshBody(ui, buf)
     local reloadOK = self:BlessedReloadUsable()
     ui:BindCheck(self.healReloadRow, (buf.healReloadCS ~= false) and reloadOK)
     if reloadOK then
-        self.healReloadRow.label:SetText("Reload Holy Shock (CS)"); ui:Color(self.healReloadRow.label, ui.COL.white)
+        self.healReloadRow.label:SetText("Reload with Crusader Strike"); ui:Color(self.healReloadRow.label, ui.COL.white)
     else
         self.healReloadRow.cb:Disable()
-        self.healReloadRow.label:SetText("Reload Holy Shock (CS) - needs Blessed Strikes"); ui:Color(self.healReloadRow.label, ui.COL.grey)
+        self.healReloadRow.label:SetText("Reload with Crusader Strike - needs Blessed Strikes"); ui:Color(self.healReloadRow.label, ui.COL.grey)
     end
 
-    -- Holy Strike filler: its mana-floor slider follows the toggle.
-    local splashOn = buf.healSplashHS ~= false
-    ui:BindCheck(self.healSplashRow, splashOn)
-    self.healSplashRow.slider:SetValue(buf.healWeaveManaFloor or 40)
-    self.healSplashRow.slider.valText:SetText((buf.healWeaveManaFloor or 40) .. "%")
-    ui:SliderEnable(self.healSplashRow.slider, splashOn)
+    ui:BindCheck(self.healSplashRow, buf.healSplashHS ~= false)
 
     -- Heal-mode mana upkeep. Both need Seal of Wisdom; shown OFF and greyed while
     -- it is not learned, without touching the stored value.
     local sowKnown = self:KnowsSpell("Seal of Wisdom")
     ui:BindCheck(self.healManaSelfRow,  buf.healManaSelf  and sowKnown, "Seal of Wisdom")
     ui:BindCheck(self.healManaJudgeRow, buf.healManaJudge and sowKnown, "Seal of Wisdom")
+    ui:BindCheck(self.healJudgeHLRow, buf.healJudgeHL)
+
+    local hsv = buf.hsMinHP or 100
+    self.hsMinHPRow.slider:SetValue(hsv)
+    if self.hsMinHPRow.slider.valText then self.hsMinHPRow.slider.valText:SetText("<=" .. hsv .. "%") end
+    ui:SliderEnable(self.hsMinHPRow.slider, buf.healSplashHS ~= false)
+
+    local hstv = buf.hsMinTargets or 1
+    self.hsMinTargetsRow.slider:SetValue(hstv)
+    if self.hsMinTargetsRow.slider.valText then self.hsMinTargetsRow.slider.valText:SetText(hstv > 1 and (">=" .. hstv) or "any") end
+    ui:SliderEnable(self.hsMinTargetsRow.slider, buf.healSplashHS ~= false)
+
+    ui:BindCheck(self.prioRow, buf.healPrio)
+    ui:BindCheck(self.prioTargetRow, buf.healPrioTarget)
+    ui:BindCheck(self.aggroRow, buf.healAggro)
+    ui:BindCheck(self.precastRow, buf.healPrecast)
+
+    local pp = buf.petPriority or 1
+    self.petPrioRow.slider:SetValue(pp)
+    if self.petPrioRow.slider.valText then
+        local lbl = "never"
+        if pp == 1 then lbl = "spare only" elseif pp >= 2 then lbl = "like players" end
+        self.petPrioRow.slider.valText:SetText(lbl)
+    end
+
+    local ohv = buf.overhealCancel or 0
+    self.ohRow.slider:SetValue(ohv)
+    if self.ohRow.slider.valText then
+        self.ohRow.slider.valText:SetText(ohv > 0 and (">=" .. ohv .. "%") or "off")
+    end
+    local ohd = buf.overhealCancelDelay or 0.5
+    self.ohDelayRow.slider:SetValue(ohd)
+    if self.ohDelayRow.slider.valText then
+        self.ohDelayRow.slider.valText:SetText(string.format("%.1fs", ohd))
+    end
+    ui:SliderEnable(self.ohDelayRow.slider, ohv > 0)
+
+    self.groupsBtn.value:SetText(M.groupsOpen and "|cff9fd8ffhide|r" or "|cff9fd8ffshow|r")
+    local skip = buf.raidGroupSkip or {}
+    for i = 1, table.getn(self.groupBtns) do
+        self.groupBtns[i].value:SetText(skip[i] and "|cffff8844skipped|r" or "|cff44ff44healed|r")
+    end
+    local pv = buf.panicPct or 0
+    self.panicRow.slider:SetValue(pv)
+    if self.panicRow.slider.valText then
+        self.panicRow.slider.valText:SetText(pv > 0 and ("<" .. pv .. "%") or "off")
+    end
+
+    local selfv = buf.healSelfPct or 40
+    self.selfRow.slider:SetValue(selfv)
+    if self.selfRow.slider.valText then
+        self.selfRow.slider.valText:SetText(selfv > 0 and ("<" .. selfv .. "%") or "off")
+    end
+    local plist = buf.healPrioList or {}
+    for i = 1, table.getn(self.prioBtns) do
+        local nm = plist[i]
+        self.prioBtns[i].value:SetText(nm or "|cff666666(empty)|r")
+    end
+
+    local ranks = {
+        { self.folMaxRow, buf.folMaxRank or 7 },
+        { self.folMinRow, buf.folMinRank or 1 },
+        { self.hlMaxRow,  buf.hlMaxRank or 9 },
+        { self.hlMinRow,  buf.hlMinRank or 1 },
+    }
+    for i = 1, table.getn(ranks) do
+        local row, v = ranks[i][1], ranks[i][2]
+        row.slider:SetValue(v)
+        if row.slider.valText then row.slider.valText:SetText(v) end
+    end
+
+    local rhv = buf.ratioHealthy or 60
+    self.ratioHealthyRow.slider:SetValue(rhv)
+    if self.ratioHealthyRow.slider.valText then
+        self.ratioHealthyRow.slider.valText:SetText(rhv > 0 and ("<" .. rhv .. "%") or "never")
+    end
     if not sowKnown then
         self.healManaSelfRow.cb:Disable()
         self.healManaJudgeRow.cb:Disable()
