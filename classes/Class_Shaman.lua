@@ -251,6 +251,16 @@ function M:NormalizeProfile(c)
     if c.useTaunt == nil then c.useTaunt = false end
     -- Restoration (heal) profile fields
     if c.healThreshold == nil then c.healThreshold = 90 end
+    -- Dispelling. Off by default: it spends a global cooldown that would
+    -- otherwise be a heal, and which afflictions are worth removing is a
+    -- judgement call that belongs to the player.
+    if c.useCure == nil then c.useCure = false end
+    -- The crossover. Curing runs BEFORE healing while the worst-hurt member is
+    -- above this; below it, healing wins. At 90 the group is cleansed first and
+    -- topped up from 90 to 100 afterwards - the order that matters when the
+    -- affliction is doing more damage than the missing tenth of a health bar.
+    -- 0 makes curing always yield, 100 makes it always come first.
+    if c.curePct == nil then c.curePct = 90 end
     if c.useManaTide == nil then c.useManaTide = true end
     if c.manaTideAt == nil then c.manaTideAt = 25 end
     if c.useNSCombo == nil then c.useNSCombo = true end
@@ -562,6 +572,32 @@ function M:Reachable(u)
 end
 
 -- Worst-hurt reachable friendly, counting pending heals toward its health.
+M.CURES = {
+    { spell = "Cure Poison",  types = { Poison = true } },
+    { spell = "Cure Disease", types = { Disease = true } },
+}
+
+-- Cure somebody, if there is nothing more pressing.
+--
+-- The threshold is a CROSSOVER, not an on/off switch: above it the affliction
+-- outranks the missing health, below it the heal does.
+--
+-- Never loops on a cure that cannot work. The unit is stamped on the attempt and
+-- left alone for a few seconds afterwards, which covers a resisted dispel, an
+-- affliction that outlasts its own removal, and a client that refused the cast.
+M.cureFail = {}
+function M:CureStep(cfg, worst)
+    if not cfg.useCure then return false end
+    if not self:GcdReady() then return false end
+    if worst and worst < ((cfg.curePct or 90) / 100) then return false end
+    local unit, spell = Aegis_SBR:PickCure(self:GroupUnits(), self.CURES,
+        function(u) return self:Reachable(u) end, self.cureFail)
+    if not unit or not spell then return false end
+    self:Later(function() self.cureFail[UnitName(unit) or "?"] = GetTime() end)
+    self:CastOn(spell, unit)
+    return true
+end
+
 function M:WorstHurt(ratio)
     local units = self:GroupUnits()
     local wU, wDef, wPct = nil, 0, 1
@@ -1172,6 +1208,9 @@ function M:RotateRestoration(cfg)
 
     local ratio = (cfg.healThreshold or 90) / 100
     local unit, deficit, pct = self:WorstHurt(ratio)
+
+    -- Curing, above the heal but only while nobody is hurt past the crossover.
+    if self:CureStep(cfg, pct) then return end
 
     -- Mana Tide Totem when low on mana (the mana cooldown).
     if cfg.useManaTide ~= false and self:KnowsSpell(MANATIDE_SPELL)

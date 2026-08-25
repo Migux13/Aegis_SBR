@@ -379,6 +379,15 @@ function M:NormalizeProfile(c)
     -- a five minute cooldown that also drops your damage by 60% is not something
     -- an addon should decide for you unasked.
     if c.panicPct == nil then c.panicPct = 0 end
+    -- Dispelling. Off by default - it spends a global cooldown that would
+    -- otherwise be a heal, and which afflictions are worth removing is a
+    -- judgement call that belongs to the player, not to us.
+    if c.useCure == nil then c.useCure = false end
+    -- The crossover. Curing runs BEFORE healing while the worst-hurt member is
+    -- above this; below it, healing wins. At 90 the group is cleansed first and
+    -- topped from 90 to 100 afterwards, which is the order that matters when the
+    -- affliction is doing more damage than the missing tenth of a health bar.
+    if c.curePct == nil then c.curePct = 90 end
     -- Pets. 0 never, 1 only when no player needs healing, 2 equal to players.
     -- A pet you have TARGETED is always considered, at any setting.
     if c.petPriority == nil then c.petPriority = 1 end
@@ -1836,6 +1845,34 @@ function M:HolyStrikeDue(cfg)
     return n >= (cfg.hsMinTargets or 1)
 end
 
+-- What this paladin can remove, best spell first. Cleanse covers all three;
+-- Purify is the low-level version without Magic.
+M.CURES = {
+    { spell = "Cleanse", types = { Poison = true, Disease = true, Magic = true } },
+    { spell = "Purify",  types = { Poison = true, Disease = true } },
+}
+M.cureFail = {}
+
+-- Cure somebody, if there is nothing more pressing.
+--
+-- The threshold is a CROSSOVER, not an on/off: above it the affliction outranks
+-- the missing health, below it the heal does. That is the whole setting - a
+-- player who wants curing to always yield sets it to 0, one who wants it to
+-- always come first sets it to 100.
+function M:CureStep(cfg, worst)
+    if not cfg.useCure then return false end
+    if not self:GcdReady() or self:StillCasting() then return false end
+    -- Somebody is hurt enough that the heal comes first.
+    if worst and worst < ((cfg.curePct or 90) / 100) then return false end
+    local unit, spell = Aegis_SBR:PickCure(self:GroupUnits(false), self.CURES,
+        function(u) return self:Reachable(u) end, self.cureFail)
+    if not unit or not spell then return false end
+    if not self:Affordable(spell) then return false end
+    self:Later(function() self.cureFail[UnitName(unit) or "?"] = GetTime() end)
+    self:CastOn(spell, unit)
+    return true
+end
+
 -- Last resort: stop everything and become invulnerable.
 --
 -- Above every other step in the rotation, healing included, because a heal that
@@ -1934,6 +1971,12 @@ function M:Rotate(cfg)
     -- Heal mode, melee-holy: the Blessed Strikes engine reloads Holy Shock
     -- between heals (never over an emergency), then group healing preempts the
     -- attack rotation, so a judgement or strike GCD never delays a needed heal.
+    -- Curing, above the heal but only while nobody is hurt past the crossover.
+    if cfg.healMode and cfg.useCure then
+        local _, _, worst = self:WorstHurt((cfg.healThreshold or 75) / 100)
+        if self:CureStep(cfg, worst) then return end
+    end
+
     -- HEALING FIRST. Everything else in heal mode is an optimisation of the
     -- quiet moments, and every one of them used to run above the heal: the
     -- Crusader Strike reload, then the Holy Strike splash. Reported from play as

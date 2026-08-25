@@ -685,6 +685,79 @@ function Aegis_SBR:SpellReaches(spell, unit)
     return true
 end
 
+-- ============================================================
+-- Dispelling
+-- ============================================================
+-- What a unit is afflicted with, as a set of dispel types: Magic, Curse,
+-- Poison, Disease.
+--
+-- The type is the THIRD return of UnitDebuff and has been there all along - the
+-- target-debuff snapshot reads past it looking for the SuperWoW spell id. No
+-- tooltip scanning and no icon list is needed for this, which is the one part of
+-- dispelling 1.12 makes easy.
+--
+-- An empty string is a real answer here and means "not dispellable by type",
+-- so it is skipped rather than stored.
+function Aegis_SBR:DispelTypes(unit)
+    local out = nil
+    if not UnitExists(unit) then return nil end
+    for i = 1, 40 do
+        local tex, _, dtype = UnitDebuff(unit, i)
+        if not tex then break end
+        if dtype and dtype ~= "" then
+            out = out or {}
+            out[dtype] = true
+        end
+    end
+    return out
+end
+
+-- How long a unit is left alone after a cure that did not take. Without it a
+-- cure that cannot work - the debuff outlasted the cast, the spell was resisted,
+-- the client refused it - is retried on every single press.
+local CURE_RETRY = 5
+
+-- Pick somebody to cure and the spell to do it with.
+--
+-- `cures` is the class's list in preference order, each { spell = ..., types =
+-- { Poison = true, ... } }; the first entry that is known AND matches something
+-- on the unit wins, so a class lists its better spell first (Abolish before
+-- Cure). `units` is the class's own group list, `reach` an optional
+-- "can I reach this unit" test.
+--
+-- Returns unit, spell. Nothing is cast here.
+function Aegis_SBR:PickCure(units, cures, reach, blacklist)
+    for i = 1, table.getn(units) do
+        local u = units[i]
+        if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
+            and UnitIsFriend("player", u)
+            and (not reach or reach(u)) then
+            local nm = UnitName(u)
+            local bl = blacklist and nm and blacklist[nm]
+            if not (bl and (GetTime() - bl) < CURE_RETRY) then
+                local types = self:DispelTypes(u)
+                if types then
+                    for c = 1, table.getn(cures) do
+                        local e = cures[c]
+                        if self:KnowsSpell(e.spell) then
+                            for t in pairs(e.types) do
+                                -- Never strip Magic off a charmed ally: the charm
+                                -- itself is the magic, and removing it is the one
+                                -- dispel that hands the mob its damage dealer back.
+                                local charmSafe = (t ~= "Magic") or not UnitIsCharmed(u)
+                                if types[t] and charmSafe then
+                                    return u, e.spell
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
 function Aegis_SBR:ManaPct()
     local mx = UnitManaMax("player")
     if mx and mx > 0 then return UnitMana("player") / mx * 100 end

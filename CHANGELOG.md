@@ -46,6 +46,47 @@ Priority is expressed as a **health handicap**, and the rule it now obeys is tha
 reorder the queue but never remove somebody from it — eligibility reads real health, ranking
 reads adjusted health.
 
+### ✨ Dispelling, for all four healers
+
+A **Dispel** section in the Paladin, Priest, Druid and Shaman panels: one switch, and a
+**Cure first above** slider.
+
+The slider is a **crossover**, not an on/off. It is read off the worst-hurt group member: above
+it the affliction outranks the missing health, below it the heal wins. At 90 the group is
+cleansed first and topped up from 90 to 100 afterwards — the order that matters when the
+affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield,
+100 makes it always come first.
+
+Only what your character has actually learned is considered, best spell first: *Cleanse* before
+*Purify*, *Abolish* before *Cure*. Off by default, because a dispel spends a global cooldown
+that would otherwise be a heal.
+
+| | removes |
+|---|---|
+| Paladin | Poison, Disease, Magic (*Cleanse*) · Poison, Disease (*Purify*) |
+| Priest | Disease (*Abolish* / *Cure Disease*) · Magic (*Dispel Magic*) |
+| Druid | Poison (*Abolish* / *Cure Poison*) · Curse (*Remove Curse*) |
+| Shaman | Poison · Disease |
+
+Three things worth naming, because each is a trap avoided rather than a feature added. The
+dispel **type** is the third return of `UnitDebuff` and has been available all along — no
+tooltip scanning, no icon list. A unit is **left alone for a few seconds after a cure that did
+not take**, so a dispel that cannot work is not retried every press. And **Magic is never
+stripped from a charmed ally**: the charm *is* the magic, and removing it is the one dispel that
+hands the enemy its damage dealer back.
+
+### 🐛 Fixed — Health Funnel into a dead pet, and Immolate on immune mobs (Warlock)
+
+A dead pet still **exists** as a unit and reads zero health, so `PetHPPct` returned 0 — under
+every threshold — and the warlock funnelled his own health into a corpse indefinitely. The fix
+is in `PetHPPct` itself, so every pet-health gate in the module is right at once.
+
+Immolate had no immunity handling at all: on a fire-immune mob the debuff never lands, the check
+reports it missing, and the same cast went out every three seconds for the whole fight. 1.12
+offers no way to *ask* whether a mob resists a school, so the only honest source is the client
+saying so — `"Your Immolate failed. X is immune."` is now read and remembered per target and per
+spell, relearned each fight. Same pattern the hunter already used for stings.
+
 ### 🐛 Fixed — a resisted DoT stalled the whole rotation (Warlock, Priest)
 
 A resist is not a cast failure: the cast completes and the spell is thrown away on landing, so
