@@ -504,11 +504,58 @@ M.STING_IMMUNE_TYPES = { Mechanical = true, Elemental = true }
 M.stingImmune = {}   -- [targetGUID] = true, learned for the current combat
 M.stingTry = nil     -- { guid, t, name }: a sting application waiting to confirm
 
+-- Immunity learned per creature TEMPLATE, kept across sessions in AegisDB.
+--
+-- The GUID table above forgets everything when combat ends, which means the same
+-- lesson is re-bought with a wasted sting on the next Baron Aquanis, and the one
+-- after that. Immunity is a property of the KIND of mob, not of the corpse in
+-- front of you, so with ClassicAPI's creature-template id it is worth keeping.
+--
+-- Deliberately still opt-in on evidence, not on a hardcoded list: the same
+-- single-cast proof as before decides, this only changes how long the answer is
+-- remembered. Types that are ALWAYS immune (Mechanical/Elemental) stay a type
+-- check and never enter this table.
+local IMMUNE_MEMORY_MAX = 200
+
+function M:ImmuneMemory()
+    if not AegisDB then return nil end
+    if type(AegisDB.stingImmuneIDs) ~= "table" then AegisDB.stingImmuneIDs = {} end
+    return AegisDB.stingImmuneIDs
+end
+
+function M:RememberImmune(id)
+    if not id then return end
+    local mem = self:ImmuneMemory()
+    if not mem then return end
+    if mem[id] then return end
+    -- Bounded so a long-lived profile cannot grow this without limit. Immune
+    -- mobs are rare enough that hitting the cap means something is wrong, so it
+    -- is cleared wholesale rather than pruned cleverly - relearning costs one
+    -- sting per type, which is exactly what this feature already accepts.
+    local n = 0
+    for _ in pairs(mem) do n = n + 1 end
+    if n >= IMMUNE_MEMORY_MAX then
+        AegisDB.stingImmuneIDs = {}
+        mem = AegisDB.stingImmuneIDs
+    end
+    mem[id] = true
+end
+
+function M:KnownImmuneType()
+    local id = Aegis_SBR.UnitCreatureID and Aegis_SBR:UnitCreatureID("target")
+    if not id then return false end
+    local mem = self:ImmuneMemory()
+    return (mem and mem[id]) and true or false
+end
+
 -- Read-only: is a sting blocked on the current target right now? No side effects
 -- (used by the rotation gate and the trace line).
 function M:StingImmuneNow()
     local ct = UnitCreatureType and UnitCreatureType("target")
     if ct and self.STING_IMMUNE_TYPES[ct] then return true end
+    -- Learned per mob type first: it survives the fight, so this is the check
+    -- that saves the wasted cast on every later specimen.
+    if self:KnownImmuneType() then return true end
     local _, guid = UnitExists("target")
     return (guid and self.stingImmune[guid]) and true or false
 end
@@ -532,6 +579,9 @@ function M:StingBlocked(sting)
             self.stingTry = nil
             if ct == "Undead" then
                 self.stingImmune[guid] = true     -- genuinely immune undead
+                -- and remember the TYPE, so the next one costs nothing
+                self:RememberImmune(Aegis_SBR.UnitCreatureID
+                    and Aegis_SBR:UnitCreatureID("target"))
                 return true
             end
         end
@@ -1011,7 +1061,9 @@ hunterFrame:SetScript("OnEvent", function()
         M.autoShotTarget = nil
         M.steadyT = 0
         M.lastAutoShot = 0   -- forget the ranged-swing phase between pulls
-        M.stingImmune = {}   -- relearn sting immunity each combat
+        -- Only the per-GUID half: what was learned per creature TYPE lives in
+        -- AegisDB and is meant to outlast the fight.
+        M.stingImmune = {}
         M.stingTry = nil
         M.stingQueuedT = nil
     elseif event == "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES" then
@@ -1046,6 +1098,8 @@ hunterFrame:SetScript("OnEvent", function()
                     local _, guid = UnitExists("target")
                     if guid and tname and string.find(arg1, tname, 1, true) then
                         M.stingImmune[guid] = true
+                        M:RememberImmune(Aegis_SBR.UnitCreatureID
+                            and Aegis_SBR:UnitCreatureID("target"))
                     end
                 end
                 M.stingTry = nil
