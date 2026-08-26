@@ -251,6 +251,12 @@ function M:NormalizeProfile(c)
     if c.useTaunt == nil then c.useTaunt = false end
     -- Restoration (heal) profile fields
     if c.healThreshold == nil then c.healThreshold = 90 end
+    -- Heal / dispel priority. A list of player names, in order: position 1 is
+    -- healed first on a near tie, position 2 next, everyone else last. The same
+    -- list decides who is dispelled first, where order is the only lever.
+    if c.healPrio == nil then c.healPrio = false end
+    if c.healPrioTarget == nil then c.healPrioTarget = false end
+    if type(c.healPrioList) ~= "table" then c.healPrioList = {} end
     -- Dispelling. Off by default: it spends a global cooldown that would
     -- otherwise be a heal, and which afflictions are worth removing is a
     -- judgement call that belongs to the player.
@@ -590,7 +596,9 @@ function M:CureStep(cfg, worst)
     if not cfg.useCure then return false end
     if not self:GcdReady() then return false end
     if worst and worst < ((cfg.curePct or 90) / 100) then return false end
-    local unit, spell = Aegis_SBR:PickCure(self:GroupUnits(), self.CURES,
+    -- Ordered by the same priority list the healing uses.
+    local units = Aegis_SBR:PrioOrderUnits(cfg, self:GroupUnits())
+    local unit, spell = Aegis_SBR:PickCure(units, self.CURES,
         function(u) return self:Reachable(u) end, self.cureFail)
     if not unit or not spell then return false end
     self:Later(function() self.cureFail[UnitName(unit) or "?"] = GetTime() end)
@@ -598,9 +606,9 @@ function M:CureStep(cfg, worst)
     return true
 end
 
-function M:WorstHurt(ratio)
+function M:WorstHurt(ratio, cfg)
     local units = self:GroupUnits()
-    local wU, wDef, wPct = nil, 0, 1
+    local wU, wDef, wPct, wBest = nil, 0, 1, 0
     for i = 1, table.getn(units) do
         local u = units[i]
         if UnitExists(u) and not UnitIsDeadOrGhost(u) and UnitIsFriend("player", u)
@@ -610,7 +618,14 @@ function M:WorstHurt(ratio)
             local pct = cur / mx
             if pct < ratio then
                 local def = mx - cur
-                if def > wDef then wU, wDef, wPct = u, def, pct end
+                -- Eligibility reads REAL health above; the priority list only
+                -- reorders what is already eligible, so it can never remove
+                -- somebody from consideration. This module ranks by the size of
+                -- the deficit, so the handicap discounts that deficit rather
+                -- than padding a percentage - the same idea in this module's own
+                -- currency.
+                local weight = def * (1 - Aegis_SBR:PrioListHandicap(cfg, u) / 100)
+                if weight > wBest then wU, wDef, wPct, wBest = u, def, pct, weight end
             end
         end
     end
@@ -1207,7 +1222,7 @@ function M:RotateRestoration(cfg)
     if not self:GcdReady() then return end
 
     local ratio = (cfg.healThreshold or 90) / 100
-    local unit, deficit, pct = self:WorstHurt(ratio)
+    local unit, deficit, pct = self:WorstHurt(ratio, cfg)
 
     -- Curing, above the heal but only while nobody is hurt past the crossover.
     if self:CureStep(cfg, pct) then return end

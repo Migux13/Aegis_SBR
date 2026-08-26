@@ -53,7 +53,34 @@ function M:BuildBody(ui, parent)
     self.surgeRow = L:Row{ key = "useArcaneSurge", label = "Arcane Surge", spell = "Arcane Surge", onToggle = set("useArcaneSurge") }
     self.arcanePowerRow = L:Row{ key = "useArcanePower", label = "Arcane Power", spell = "Arcane Power", onToggle = set("useArcanePower") }
 
+
+    L:Header("Decurse")
+    self.cureRow = L:Row{ key = "useCure", label = "Remove curses from the group", spell = "Remove Lesser Curse", onToggle = set("useCure") }
+    self.prioTargetRow = L:Row{ key = "healPrioTarget", label = "Your target first", onToggle = set("healPrioTarget") }
+
+    L:Header("Decurse priority", function()
+        return ui.buf and ui.buf.useCure and true or false
+    end)
+    self.prioAddBtn = L:Button{ label = "Add target", onClick = function()
+        if ui.buf then Aegis_SBR:PrioAdd(ui.buf, UnitName("target")); ui:Refresh() end
+    end }
+    self.prioClearBtn = L:Button{ label = "Clear", onClick = function()
+        if ui.buf then ui.buf.healPrioList = {}; ui:Refresh() end
+    end }
+    self.prioBtns = {}
+    for i = 1, 5 do
+        local idx = i
+        self.prioBtns[idx] = L:Button{ label = idx .. ".", onClick = function()
+            if ui.buf then Aegis_SBR:PrioRemove(ui.buf, idx); ui:Refresh() end
+        end }
+    end
+
     L:Finish()
+
+    ui:Tip(self.cureRow.cb, "Remove curses from the group", "Casts Remove Lesser Curse on a cursed party or raid member, without changing your target.", "Off by default: it costs a global cooldown. Runs above the damage rotation, because a curse left on the group usually costs more than one missed cast.")
+    ui:Tip(self.prioTargetRow.cb, "Your target first", "While you have a friendly target selected it is decursed first, ahead of the list.")
+    ui:Tip(self.prioAddBtn, "Add target", "Adds your current target to the end of the decurse list.", "Names, not raid slots, so the list survives a regroup.")
+    ui:Tip(self.prioClearBtn, "Clear", "Empties the list.")
 
     -- Tooltips carry the detail that used to be in the labels.
     ui:Tip(self.aoeRow.cb, "AoE mode", "Frost Nova to freeze, Cone of Cold to snare, Icicles, then Arcane Explosion.", "Blizzard / Flamestrike are not auto-cast (they need a ground click). Also /sbr aoe.")
@@ -116,6 +143,14 @@ function M:RefreshBody(ui, buf)
     self.frostSection:SetDimmed(m ~= "frost")
     self.fireSection:SetDimmed(m ~= "fire")
     self.arcaneSection:SetDimmed(m ~= "arcane")
+    ui:BindCheck(self.cureRow, buf.useCure, "Remove Lesser Curse")
+
+    ui:BindCheck(self.prioTargetRow, buf.healPrioTarget)
+    local plist = buf.healPrioList or {}
+    for i = 1, table.getn(self.prioBtns) do
+        self.prioBtns[i].value:SetText(plist[i] or "|cff666666(empty)|r")
+    end
+
 end
 
 -- Open the shared window for this class.

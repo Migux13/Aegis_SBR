@@ -412,6 +412,20 @@ function Aegis_SBR:CDInfo(name)
     return string.format("cd %.1fs", rem)
 end
 
+-- Seconds left on a spell's OWN cooldown, 0 when it is ready. The global
+-- cooldown is not a wait for a specific spell, so it reports 0 like OwnCDReady
+-- treats it as ready - a plan that has to add up several waits must not count
+-- the same 1.5s once per step.
+function Aegis_SBR:OwnCDLeft(name)
+    local slot = self:FindSpellSlot(name)
+    if not slot then return 0 end
+    local start, dur = GetSpellCooldown(slot, BOOKTYPE_SPELL)
+    if start == 0 or dur <= 1.55 then return 0 end
+    local rem = start + dur - GetTime()
+    if rem < 0 then return 0 end
+    return rem
+end
+
 -- True if the spell's OWN cooldown is free, ignoring the global cooldown.
 -- A short reported duration (<= ~1.5s) means only the GCD is active, which
 -- we treat as "ready" so a held priority spell does not lose the GCD-edge
@@ -686,6 +700,119 @@ function Aegis_SBR:SpellReaches(spell, unit)
 end
 
 -- ============================================================
+-- Heal / dispel priority list
+-- ============================================================
+-- A list of player NAMES, in order. Names rather than raid slots, so it survives
+-- a regroup; shared between healing and dispelling because it is the same
+-- statement about the same people - a poison on the tank matters for the same
+-- reason a heal on the tank does.
+--
+-- Lives here rather than in each class so the four healers and the mage cannot
+-- drift apart on what "priority" means.
+
+-- How many percentage points a unit's health is padded by, according to its
+-- place on the list. Position 1 carries none, position 2 twenty, anyone unlisted
+-- thirty-five. The padding makes a unit read as HEALTHIER, so it only decides
+-- near-ties - a badly hurt damage dealer still outranks a scratched tank.
+local PRIO_STEPS = { 0, 20 }
+local PRIO_OTHERS = 35
+
+function Aegis_SBR:PrioAdd(cfg, name)
+    if not name or name == "" then return false end
+    if type(cfg.healPrioList) ~= "table" then cfg.healPrioList = {} end
+    for i = 1, table.getn(cfg.healPrioList) do
+        if cfg.healPrioList[i] == name then return false end
+    end
+    table.insert(cfg.healPrioList, name)
+    return true
+end
+
+function Aegis_SBR:PrioRemove(cfg, idx)
+    if type(cfg.healPrioList) ~= "table" then return false end
+    if not idx or not cfg.healPrioList[idx] then return false end
+    table.remove(cfg.healPrioList, idx)
+    return true
+end
+
+-- Handicap from the list alone, 0 when the feature is off or the list is empty.
+function Aegis_SBR:PrioListHandicap(cfg, unit)
+    if not cfg or not cfg.healPrio then return 0 end
+    local list = cfg.healPrioList
+    if not list or table.getn(list) == 0 then return 0 end
+    local name = UnitName(unit)
+    if name then
+        for i = 1, table.getn(list) do
+            if list[i] == name then return PRIO_STEPS[i] or PRIO_OTHERS end
+        end
+    end
+    return PRIO_OTHERS
+end
+
+-- The same units, reordered: your friendly target first (when that option is
+-- on), then the list in its own order, then everyone else as they came.
+--
+-- Used for dispelling, where there is nothing to weigh - an affliction is
+-- present or it is not, so order is the only lever. Applied whenever the list
+-- has entries, independently of the heal-priority switch, which governs the
+-- health handicap above and has no meaning here.
+function Aegis_SBR:PrioOrderUnits(cfg, units)
+    if not cfg then return units end
+    local list = cfg.healPrioList
+    local wantTarget = cfg.healPrioTarget and UnitExists("target")
+        and UnitIsFriend("player", "target")
+    if not wantTarget and (not list or table.getn(list) == 0) then return units end
+
+    local out, taken = {}, {}
+    local function add(u)
+        if u and not taken[u] then taken[u] = true; table.insert(out, u) end
+    end
+    if wantTarget then
+        for i = 1, table.getn(units) do
+            if UnitExists(units[i]) and UnitIsUnit(units[i], "target") then add(units[i]) end
+        end
+    end
+    if list then
+        for r = 1, table.getn(list) do
+            for i = 1, table.getn(units) do
+                local u = units[i]
+                if UnitExists(u) and UnitName(u) == list[r] then add(u) end
+            end
+        end
+    end
+    for i = 1, table.getn(units) do add(units[i]) end
+    return out
+end
+
+-- The party or raid as unit tokens, for a class that has no roster helper of
+-- its own.
+function Aegis_SBR:GroupUnitList()
+    local units = {}
+    local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+    if nr > 0 then
+        for i = 1, nr do table.insert(units, "raid" .. i) end
+    else
+        table.insert(units, "player")
+        local np = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+        for i = 1, np do table.insert(units, "party" .. i) end
+    end
+    return units
+end
+
+-- Cast at a unit without changing your target (SuperWoW's unit argument), and
+-- report rather than cast while a preview is running.
+function Aegis_SBR:CastOnUnit(spell, unit, reason)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
+        return true
+    end
+    Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    CastSpellByName(spell, unit)
+    return true
+end
+
+-- ============================================================
 -- Dispelling
 -- ============================================================
 -- What a unit is afflicted with, as a set of dispel types: Magic, Curse,
@@ -717,16 +844,55 @@ end
 -- the client refused it - is retried on every single press.
 local CURE_RETRY = 5
 
+-- Which affliction to remove first. Magic before Curse before Poison before
+-- Disease, which is the established default order for this.
+--
+-- Ordered on purpose, and this drives the whole search: the first version
+-- walked each spell's covered types with `pairs`, which has no defined order in
+-- Lua. A paladin holding Cleanse - three types in one spell - therefore removed
+-- whichever type the table happened to enumerate first, not the one that
+-- mattered. Roughly: magic tends to be the crowd control and the damage
+-- amplifier, disease the slow tick you can outheal.
+local DISPEL_ORDER = { "Magic", "Curse", "Poison", "Disease" }
+
 -- Pick somebody to cure and the spell to do it with.
 --
--- `cures` is the class's list in preference order, each { spell = ..., types =
--- { Poison = true, ... } }; the first entry that is known AND matches something
--- on the unit wins, so a class lists its better spell first (Abolish before
--- Cure). `units` is the class's own group list, `reach` an optional
--- "can I reach this unit" test.
+-- Type first, then unit: a Magic effect anywhere in the group outranks a Poison
+-- anywhere, which is how the ordering above is meant to work. Within one type
+-- the group is walked in roster order.
 --
--- Returns unit, spell. Nothing is cast here.
+-- `cures` is the class's list, each { spell = ..., types = { Poison = true } };
+-- for a given affliction the first entry that covers it AND is trained wins, so
+-- a class lists its better spell first (Abolish before Cure, Cleanse before
+-- Purify). `units` is the class's own group list, `reach` an optional "can I
+-- reach this unit" test.
+--
+-- Returns unit, spell, type. Nothing is cast here.
 function Aegis_SBR:PickCure(units, cures, reach, blacklist)
+    -- Which spell, if any, answers each affliction. Resolved once instead of
+    -- inside the unit loop.
+    local spellFor = {}
+    local anySpell = false
+    for oi = 1, table.getn(DISPEL_ORDER) do
+        local want = DISPEL_ORDER[oi]
+        for c = 1, table.getn(cures) do
+            local e = cures[c]
+            if e.types[want] and self:KnowsSpell(e.spell) then
+                spellFor[want] = e.spell
+                anySpell = true
+                break
+            end
+        end
+    end
+    if not anySpell then return nil, nil, nil end
+
+    -- Each unit's afflictions, read ONCE.
+    --
+    -- This loop used to sit inside the type loop, so a forty-man raid cost four
+    -- passes over forty members at up to forty debuff slots each - better than
+    -- six thousand UnitDebuff calls per press, four times a second. Invisible in
+    -- a five-man and ruinous in a raid, which is exactly how it was found.
+    local order, seen = {}, 0
     for i = 1, table.getn(units) do
         local u = units[i]
         if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
@@ -737,25 +903,153 @@ function Aegis_SBR:PickCure(units, cures, reach, blacklist)
             if not (bl and (GetTime() - bl) < CURE_RETRY) then
                 local types = self:DispelTypes(u)
                 if types then
-                    for c = 1, table.getn(cures) do
-                        local e = cures[c]
-                        if self:KnowsSpell(e.spell) then
-                            for t in pairs(e.types) do
-                                -- Never strip Magic off a charmed ally: the charm
-                                -- itself is the magic, and removing it is the one
-                                -- dispel that hands the mob its damage dealer back.
-                                local charmSafe = (t ~= "Magic") or not UnitIsCharmed(u)
-                                if types[t] and charmSafe then
-                                    return u, e.spell
-                                end
-                            end
+                    seen = seen + 1
+                    order[seen] = { unit = u, types = types, charmed = UnitIsCharmed(u) }
+                end
+            end
+        end
+    end
+    if seen == 0 then return nil, nil, nil end
+
+    -- Type first, then unit: a Magic effect anywhere in the group outranks a
+    -- Poison anywhere. Within one type the units keep the order they arrived in,
+    -- which is where a class's priority list has already had its say.
+    for oi = 1, table.getn(DISPEL_ORDER) do
+        local want = DISPEL_ORDER[oi]
+        local spell = spellFor[want]
+        if spell then
+            for i = 1, seen do
+                local e = order[i]
+                -- Never strip Magic off a charmed ally: the charm itself IS the
+                -- magic, and removing it is the one dispel that hands the mob
+                -- its damage dealer back.
+                local charmSafe = (want ~= "Magic") or not e.charmed
+                if e.types[want] and charmSafe then return e.unit, spell, want end
+            end
+        end
+    end
+    return nil, nil, nil
+end
+
+-- The party or raid as unit tokens, for a class that has no roster helper of
+-- its own.
+function Aegis_SBR:GroupUnitList()
+    local units = {}
+    local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+    if nr > 0 then
+        for i = 1, nr do table.insert(units, "raid" .. i) end
+    else
+        table.insert(units, "player")
+        local np = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+        for i = 1, np do table.insert(units, "party" .. i) end
+    end
+    return units
+end
+
+-- Cast at a unit without changing your target (SuperWoW's unit argument), and
+-- report rather than cast while a preview is running.
+function Aegis_SBR:CastOnUnit(spell, unit, reason)
+    if Aegis_SBR.deciding then
+        local p = Aegis_SBR.decidePlan
+        p.spell = spell
+        p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
+        return true
+    end
+    Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    CastSpellByName(spell, unit)
+    return true
+end
+
+-- ============================================================
+-- Dispelling
+-- ============================================================
+-- What a unit is afflicted with, as a set of dispel types: Magic, Curse,
+-- Poison, Disease.
+--
+-- The type is the THIRD return of UnitDebuff and has been there all along - the
+-- target-debuff snapshot reads past it looking for the SuperWoW spell id. No
+-- tooltip scanning and no icon list is needed for this, which is the one part of
+-- dispelling 1.12 makes easy.
+--
+-- An empty string is a real answer here and means "not dispellable by type",
+-- so it is skipped rather than stored.
+function Aegis_SBR:DispelTypes(unit)
+    local out = nil
+    if not UnitExists(unit) then return nil end
+    for i = 1, 40 do
+        local tex, _, dtype = UnitDebuff(unit, i)
+        if not tex then break end
+        if dtype and dtype ~= "" then
+            out = out or {}
+            out[dtype] = true
+        end
+    end
+    return out
+end
+
+-- How long a unit is left alone after a cure that did not take. Without it a
+-- cure that cannot work - the debuff outlasted the cast, the spell was resisted,
+-- the client refused it - is retried on every single press.
+local CURE_RETRY = 5
+
+-- Which affliction to remove first. Magic before Curse before Poison before
+-- Disease, which is the established default order for this.
+--
+-- Ordered on purpose, and this drives the whole search: the first version
+-- walked each spell's covered types with `pairs`, which has no defined order in
+-- Lua. A paladin holding Cleanse - three types in one spell - therefore removed
+-- whichever type the table happened to enumerate first, not the one that
+-- mattered. Roughly: magic tends to be the crowd control and the damage
+-- amplifier, disease the slow tick you can outheal.
+local DISPEL_ORDER = { "Magic", "Curse", "Poison", "Disease" }
+
+-- Pick somebody to cure and the spell to do it with.
+--
+-- Type first, then unit: a Magic effect anywhere in the group outranks a Poison
+-- anywhere, which is how the ordering above is meant to work. Within one type
+-- the group is walked in roster order.
+--
+-- `cures` is the class's list, each { spell = ..., types = { Poison = true } };
+-- for a given affliction the first entry that covers it AND is trained wins, so
+-- a class lists its better spell first (Abolish before Cure, Cleanse before
+-- Purify). `units` is the class's own group list, `reach` an optional "can I
+-- reach this unit" test.
+--
+-- Returns unit, spell, type. Nothing is cast here.
+function Aegis_SBR:PickCure(units, cures, reach, blacklist)
+    for oi = 1, table.getn(DISPEL_ORDER) do
+        local want = DISPEL_ORDER[oi]
+
+        -- The best spell we own for this affliction, or none.
+        local spell
+        for c = 1, table.getn(cures) do
+            local e = cures[c]
+            if e.types[want] and self:KnowsSpell(e.spell) then spell = e.spell; break end
+        end
+
+        if spell then
+            for i = 1, table.getn(units) do
+                local u = units[i]
+                if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
+                    and UnitIsFriend("player", u)
+                    and (not reach or reach(u)) then
+                    local nm = UnitName(u)
+                    local bl = blacklist and nm and blacklist[nm]
+                    if not (bl and (GetTime() - bl) < CURE_RETRY) then
+                        -- Never strip Magic off a charmed ally: the charm itself
+                        -- IS the magic, and removing it is the one dispel that
+                        -- hands the mob its damage dealer back.
+                        local charmSafe = (want ~= "Magic") or not UnitIsCharmed(u)
+                        if charmSafe then
+                            local types = self:DispelTypes(u)
+                            if types and types[want] then return u, spell, want end
                         end
                     end
                 end
             end
         end
     end
-    return nil, nil
+    return nil, nil, nil
 end
 
 function Aegis_SBR:ManaPct()
@@ -1314,6 +1608,59 @@ function Aegis_SBR:RunAssist()
     end
 end
 
+-- ============================================================
+-- Performance sampling
+-- ============================================================
+-- How long OUR rotation takes per press, and what the frame rate is doing
+-- around it. Written into the probe log, so the answer comes out of a raid you
+-- were going to run anyway - reproducing a forty-man group to test something is
+-- not a thing anybody can do on request.
+--
+-- debugprofilestart/stop are millisecond timers the client provides; where they
+-- are missing the sampler simply reports frame rate and press count, which still
+-- separates "the addon is slow" from "everything is slow".
+--
+-- One line every five seconds, so a whole raid night is a few hundred lines.
+local PERF_REPORT = 5
+function Aegis_SBR:PerfStart()
+    if not self:ProbeEnabled() then return end
+    if debugprofilestart then debugprofilestart() end
+    self.perfOn = true
+end
+
+function Aegis_SBR:PerfStop()
+    if not self.perfOn then return end
+    self.perfOn = false
+    local ms = debugprofilestop and debugprofilestop() or nil
+
+    self.perfN = (self.perfN or 0) + 1
+    if ms then
+        self.perfSum = (self.perfSum or 0) + ms
+        if not self.perfMax or ms > self.perfMax then self.perfMax = ms end
+    end
+
+    local now = GetTime()
+    if not self.perfT then self.perfT = now; return end
+    if (now - self.perfT) < PERF_REPORT then return end
+
+    local span = now - self.perfT
+    local fps = GetFramerate and GetFramerate() or 0
+    local n = self.perfN or 0
+    local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+    local np = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+    self:ProbeWrite("perf", string.format(
+        "fps=%.0f presses=%d (%.1f/s) rot_avg=%s rot_max=%s group=%d",
+        fps, n, n / span,
+        self.perfSum and string.format("%.2fms", self.perfSum / n) or "?",
+        self.perfMax and string.format("%.2fms", self.perfMax) or "?",
+        (nr > 0) and nr or (np + 1)))
+
+    self.perfT = now
+    self.perfN = 0
+    self.perfSum = nil
+    self.perfMax = nil
+end
+
 function Aegis_SBR:RunRotation()
     if not self.active then self:Throttle("no module for your class yet."); return end
     local cfg = self:GetActiveProfile()
@@ -1367,7 +1714,18 @@ function Aegis_SBR:RunRotation()
         if supportRun then
             self:SnapshotBuffs()
             self:SnapshotTargetDebuffs()
+            self:PerfStart()
             self.active:Rotate(cfg)
+            self:PerfStop()
+            UIErrorsFrame:Clear()
+        elseif self.active.Prebuff then
+            -- Everything a module can honestly do with nobody targeted: self
+            -- buffs it wants up before contact. Deliberately a SEPARATE hook
+            -- from RunsWithoutTarget, which also decides whether auto-acquire
+            -- fires - answering "yes, run me" there would stop a melee class
+            -- picking up a target at all.
+            self:SnapshotBuffs()
+            self.active:Prebuff(cfg)
             UIErrorsFrame:Clear()
         end
         return
@@ -1388,7 +1746,9 @@ function Aegis_SBR:RunRotation()
     -- finisher spends them and the cast event arrives with the counter already
     -- at zero. No-op unless the probe log is enabled.
     if self.ProbeNoteCombo then self:ProbeNoteCombo() end
+    self:PerfStart()
     self.active:Rotate(cfg)
+    self:PerfStop()
     UIErrorsFrame:Clear()
 end
 

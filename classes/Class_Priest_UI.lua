@@ -49,7 +49,34 @@ function M:BuildBody(ui, parent)
     self.curePctRow = L:Row{ label = "Cure first above",
         slider = { key = "curePct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("curePct") } }
 
+
+    L:Header("Heal priority")
+    self.prioRow = L:Row{ key = "healPrio", label = "Use priority list", onToggle = set("healPrio") }
+    self.prioTargetRow = L:Row{ key = "healPrioTarget", label = "Your target first", onToggle = set("healPrioTarget") }
+
+    L:Header("Priority list", function()
+        return ui.buf and (ui.buf.healPrio or ui.buf.healPrioTarget) and true or false
+    end)
+    self.prioAddBtn = L:Button{ label = "Add target", onClick = function()
+        if ui.buf then Aegis_SBR:PrioAdd(ui.buf, UnitName("target")); ui:Refresh() end
+    end }
+    self.prioClearBtn = L:Button{ label = "Clear", onClick = function()
+        if ui.buf then ui.buf.healPrioList = {}; ui:Refresh() end
+    end }
+    self.prioBtns = {}
+    for i = 1, 5 do
+        local idx = i
+        self.prioBtns[idx] = L:Button{ label = idx .. ".", onClick = function()
+            if ui.buf then Aegis_SBR:PrioRemove(ui.buf, idx); ui:Refresh() end
+        end }
+    end
+
     L:Finish()
+
+    ui:Tip(self.prioRow.cb, "Use priority list", "On a near tie, heal the listed players first: position 1 before position 2, both before anyone unlisted.", "A handicap, not a strict order - position 2 counts as 20%% healthier than it is, unlisted players as 35%%. Somebody in real trouble always outranks a scratched tank, because eligibility reads real health and only the ORDER is adjusted.")
+    ui:Tip(self.prioTargetRow.cb, "Your target first", "While you have a friendly target selected it is considered first, ahead of the list.")
+    ui:Tip(self.prioAddBtn, "Add target", "Adds your current target to the end of the list.", "Names, not raid slots, so the list survives a regroup. The same list decides who is dispelled first.")
+    ui:Tip(self.prioClearBtn, "Clear", "Empties the priority list.")
 
     ui:Tip(self.cureRow.cb, "Cure afflictions", "Remove curses, poisons, diseases and magic from the group with whatever your class has for it - here: Disease (Abolish or Cure Disease) and Magic (Dispel Magic).", "Off by default. A dispel costs a global cooldown that would otherwise be a heal, and only what you can actually remove is ever considered.")
     ui:Tip(self.curePctRow.slider, "Cure first above", "The crossover between curing and healing, read off the WORST-HURT member. Above it the affliction comes first; below it the heal does.", "At 90 the group is cleansed first and topped up from 90 to 100 afterwards - the right order when the affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield, 100 makes it always come first.")
@@ -137,6 +164,14 @@ function M:RefreshBody(ui, buf)
     self.curePctRow.slider:SetValue(cpv)
     if self.curePctRow.slider.valText then self.curePctRow.slider.valText:SetText(">" .. cpv .. "%") end
     ui:SliderEnable(self.curePctRow.slider, buf.useCure and true or false)
+
+    ui:BindCheck(self.prioRow, buf.healPrio)
+
+    ui:BindCheck(self.prioTargetRow, buf.healPrioTarget)
+    local plist = buf.healPrioList or {}
+    for i = 1, table.getn(self.prioBtns) do
+        self.prioBtns[i].value:SetText(plist[i] or "|cff666666(empty)|r")
+    end
 
 end
 
