@@ -29,14 +29,17 @@ Author tag: "Mercaius & Subtilizer (Torchlite)".
 3. Run `python3 scripts/verify.py --all` after every edit; never hand off a failing file.
 
 ## Current State / Next Task
-**Current release: v1.1.9** — ClassicAPI support, the range window, and the Subtlety rogue
-path, shipped alongside the Hunter pet window and the Serpent Sting fixes. Since v1.1.4:
+**Current release: v1.2.0** — the Paladin healing engine rebuilt from the ground up, dispelling
+for all four healers plus the mage, a Solofarming page, and a rotation that finally knows how
+far away things are. Driven throughout by play reports and press logs rather than theory. Since
+v1.1.4:
 **v1.1.5** `/sbr spell <name>` toggles instead of silently switching off; **v1.1.6** Hunter's
 Mark leads the rotation (approved priority change) + `verify.py` lookbehind fix; **v1.1.7**
 Shaman totem + imbue overhaul, per-context buff lists, Paladin melee heal margin; **v1.1.8**
 the Rogue combo-point/energy economy cut, driven by replaying ~2000 logged presses rather than
 theory (it reverted two of our own earlier changes with the measurements that killed them);
-**v1.1.9** as above.
+**v1.1.9** ClassicAPI support, the range window and the Subtlety rogue, alongside the Hunter pet
+window and the Serpent Sting fixes; **v1.2.0** as above.
 
 Working tree clean, `main` in sync with `origin/main`, no open PRs.
 

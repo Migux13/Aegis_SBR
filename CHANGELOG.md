@@ -4,7 +4,7 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v1.2.0 (unreleased) — Paladin healing rebuilt, and DoTs that survive a resist
+## v1.2.0 — Paladin healing rebuilt, dispelling, and DoTs that survive a resist
 
 ### 🙏 Thanks
 
@@ -45,6 +45,17 @@ only" and "Holy Light whenever it is the bigger heal".
 Priority is expressed as a **health handicap**, and the rule it now obeys is that a handicap may
 reorder the queue but never remove somebody from it — eligibility reads real health, ranking
 reads adjusted health.
+
+### 🐛 Fixed — Mongoose Bite almost never fired
+
+It was gated on a five second window after **dodging** an enemy attack, which is the vanilla
+rule and not this client's: here it is an ordinary instant melee attack on a five second
+cooldown, with no condition attached. It goes out on cooldown now, and the tooltip says so —
+including that the dodge requirement does *not* apply, so nobody rebuilds it from vanilla
+knowledge.
+
+The dodge tracker went with it: it existed for this one gate, and it was subscribing to
+`CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES`, which fires on every enemy attack you avoid.
 
 ### ✨ Paladin: four pages instead of two
 
