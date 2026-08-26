@@ -103,6 +103,15 @@ M.templates = {
 
 function M:NormalizeProfile(c)
     if c.mode == nil then c.mode = "frost" end
+    -- Decursing. The mage is not a healer, so there is no health threshold to
+    -- weigh this against - a curse is either on somebody or it is not, and
+    -- removing it costs one global cooldown. Off by default all the same.
+    if c.useCure == nil then c.useCure = false end
+    -- The order in which group members are considered: your friendly target
+    -- first (when that option is on), then this list, then the roster. The same
+    -- list the healers use, so the concept does not differ per class.
+    if c.healPrioTarget == nil then c.healPrioTarget = false end
+    if type(c.healPrioList) ~= "table" then c.healPrioList = {} end
     if c.aoeMode == nil then c.aoeMode = false end
     -- wand / leveling
     if c.useWand == nil then c.useWand = true end
@@ -250,6 +259,29 @@ end
 -- ============================================================
 -- Rotation entry: shared upkeep, then dispatch by spec / AoE.
 -- ============================================================
+-- Remove Lesser Curse is the mage's whole dispel kit: curses only, 30 yards,
+-- and cast at a unit without changing target through SuperWoW's unit argument.
+M.CURES = {
+    { spell = "Remove Lesser Curse", types = { Curse = true } },
+}
+M.cureFail = {}
+
+-- Decurse somebody. Above the damage rotation, below the shields: a curse left
+-- on the group usually costs more than one missed cast, and unlike a heal there
+-- is no severity to weigh it against - it is there or it is not.
+function M:CureStep(cfg)
+    if not cfg.useCure then return false end
+    if not self:KnowsSpell("Remove Lesser Curse") then return false end
+    if not self:IsReady("Remove Lesser Curse") then return false end
+    local units = Aegis_SBR:PrioOrderUnits(cfg, Aegis_SBR:GroupUnitList())
+    local unit, spell = Aegis_SBR:PickCure(units, self.CURES,
+        function(u) return Aegis_SBR:SpellReaches("Remove Lesser Curse", u) end,
+        self.cureFail)
+    if not unit or not spell then return false end
+    self:Later(function() self.cureFail[UnitName(unit) or "?"] = GetTime() end)
+    return Aegis_SBR:CastOnUnit(spell, unit, "decurse")
+end
+
 function M:Rotate(cfg)
     -- Never act over a running channel (Arcane Missiles / Icicles / Evocation).
     if self.channeling and self.chanStart and (GetTime() - self.chanStart) < 16 then return end
@@ -257,6 +289,10 @@ function M:Rotate(cfg)
     -- Shields and emergency Evocation, in any spec (Ice Barrier pre-pull works
     -- with no target).
     if self:Upkeep(cfg) then return end
+
+    -- Decursing, before the damage rotation and without needing a target of your
+    -- own - the unit argument does the aiming.
+    if self:CureStep(cfg) then return end
 
     -- Everything below needs an attackable target.
     if not self:HasEnemy() then return end

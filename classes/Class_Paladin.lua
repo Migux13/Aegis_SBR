@@ -197,6 +197,7 @@ end
 -- Templates: starting presets, copied into the char's saved profiles once.
 M.templates = {
     starter = {  -- valid for a brand new paladin (only Seal of Righteousness)
+        spec = "retri",
         seals = { debuff = "", damage = "Seal of Righteousness" },
         consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
@@ -208,6 +209,7 @@ M.templates = {
         spells = { holyStrike = false, crusaderStrike = false, holyShield = false, hammerOfWrath = false, repentance = false },
     },
     retri = {
+        spec = "retri",
         seals = { debuff = "Seal of the Crusader", damage = "Seal of Righteousness" },
         consecInMana = false,
         -- Mana management ON, unlike every other template. Retribution is the
@@ -222,6 +224,7 @@ M.templates = {
         spells = { holyStrike = true, crusaderStrike = true, holyShield = false, hammerOfWrath = false, repentance = false },
     },
     prot = {
+        spec = "tank",
         seals = { debuff = "Seal of the Crusader", damage = "Seal of Righteousness" },
         consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
@@ -230,6 +233,7 @@ M.templates = {
         spells = { holyStrike = true, crusaderStrike = true, holyShield = true, hammerOfWrath = false, repentance = false },
     },
     heal = {  -- group healer: heals the party/raid, keeps Seal of Wisdom for mana
+        spec = "heal",
         seals = { debuff = "", damage = "" },
         consecInMana = false,
         manaManage = false, manaLow = 30, manaHigh = 70,
@@ -328,6 +332,19 @@ function M:NormalizeProfile(c)
     -- Coerce to a strict boolean. This also repairs any profile corrupted by the
     -- old tab bug, which could store the string "damage" (truthy) into healMode.
     c.healMode = (c.healMode == true)
+    -- Which page of the panel this profile is on: "tank", "retri" or "heal".
+    --
+    -- healMode stays the field the ROTATION branches on - every existing check
+    -- reads it and none of them had to change. spec is derived into it at the
+    -- top of Rotate, so the two can never disagree, and an older profile that
+    -- only has healMode lands on the right tab here.
+    if c.spec == nil then c.spec = c.healMode and "heal" or "retri" end
+    -- "retri" is the DPS page; the key kept its old name through the rename so
+    -- profiles written before it keep working.
+    if c.spec ~= "tank" and c.spec ~= "solo" and c.spec ~= "retri" and c.spec ~= "heal" then
+        c.spec = c.healMode and "heal" or "retri"
+    end
+    c.healMode = (c.spec == "heal")
     if c.healThreshold == nil then c.healThreshold = 75 end
     -- Reserve Holy Light for targets below this health percent (0 = off, the
     -- efficiency comparison in DoHeal decides on its own). Community request:
@@ -379,6 +396,11 @@ function M:NormalizeProfile(c)
     -- a five minute cooldown that also drops your damage by 60% is not something
     -- an addon should decide for you unasked.
     if c.panicPct == nil then c.panicPct = 0 end
+    -- The tank's version of the same idea, and deliberately a different spell.
+    -- A bubble drops every point of threat you have built, which on a tank hands
+    -- the whole pull to somebody who cannot survive it - the emergency that
+    -- saves you kills the group. Lay on Hands costs no threat.
+    if c.tankLohPct == nil then c.tankLohPct = 0 end
     -- Dispelling. Off by default - it spends a global cooldown that would
     -- otherwise be a heal, and which afflictions are worth removing is a
     -- judgement call that belongs to the player, not to us.
@@ -697,11 +719,16 @@ function M:DebuffEffectivelyUp(debuffSeal)
     return self.debuffSeenAt ~= nil and (now - self.debuffSeenAt) < 1.5
 end
 
-function M:HandleSeals(cfg)
+-- `forceDebuff` overrides the profile's debuff seal for this press only, and
+-- exists for one caller: the Hammer of Wrath execute, which wants Judgement of
+-- the Crusader on the target and asks for it HERE rather than casting a seal
+-- itself. Routing it through this function is the point - the seal cycle stays
+-- in one place, so nothing can end up fighting over which seal is carried.
+function M:HandleSeals(cfg, forceDebuff)
     -- Returns true if a cast was issued, so the caller can stop.
     if not self.manaMgmtActive then self.weaving = false end
 
-    local debuffSeal = cfg.seals.debuff
+    local debuffSeal = forceDebuff or cfg.seals.debuff
     local dmgSeal    = cfg.seals.damage
     local canJudge   = self:KnowsSpell("Judgement") -- Safety check for low levels
 
@@ -709,7 +736,10 @@ function M:HandleSeals(cfg)
     -- of Wisdom) instead of the configured one, since it returns mana to attackers
     -- and aids recovery. Toggled per profile.
     local effDebuff = debuffSeal
-    if self.manaMgmtActive and cfg.manaWisdomDebuff and self:KnowsSpell("Seal of Wisdom") then
+    -- The forced seal wins over the mana-recovery substitution: it was asked for
+    -- by a step that already decided it is worth the mana.
+    if not forceDebuff and self.manaMgmtActive and cfg.manaWisdomDebuff
+        and self:KnowsSpell("Seal of Wisdom") then
         effDebuff = "Seal of Wisdom"
     end
 
@@ -717,7 +747,11 @@ function M:HandleSeals(cfg)
     -- Skipped if Judgement is not yet learned.
     if effDebuff ~= "" and canJudge and not self:DebuffEffectivelyUp(effDebuff) then
         if not self:HasBuff(effDebuff) then return self:Pick(effDebuff, "debuff seal") end
-        if self:IsReady("Judgement") and self:Affordable("Judgement") then
+        -- Judgement reaches about ten yards; the seal above is a self buff and
+        -- needs nothing. Without this the seal went up at range and the
+        -- judgement behind it failed on every press.
+        if self:IsReady("Judgement") and self:Affordable("Judgement")
+            and Aegis_SBR:SpellReaches("Judgement", "target") then
             return self:Pick("Judgement", "stamp the debuff")
         end
         return false   -- seal up, waiting for judgement to apply the debuff
@@ -792,6 +826,45 @@ function M:DesiredOpenerSeal(cfg)
     return nil
 end
 
+-- What the paladin can do with nobody targeted: put the seal on.
+--
+-- A seal is a self buff and needs neither an enemy nor range - the rotation
+-- simply never got the chance to cast one, because the core holds a melee module
+-- back until there is something to hit, and the module's own opener branch sits
+-- behind that same guard. So the seal went up on CONTACT, costing a global
+-- cooldown at the one moment it is worth the most.
+--
+-- Holy Shield belongs here too, and for a reason that is easy to get wrong: its
+-- COOLDOWN EQUALS ITS DURATION. Nothing is thrown away by raising it early -
+-- arrive inside the ten seconds and it is already up; arrive later and the
+-- cooldown has expired with it, so it goes up on contact exactly as before. The
+-- one thing that breaks that symmetry is blocks being consumed early, which
+-- cannot happen while running in with nobody hitting you.
+--
+-- Nothing is spent while both are up, so holding the button between pulls costs
+-- one cast per lapse rather than one per press - though note Holy Shield lapses
+-- every ten seconds against the seal's thirty, so idling on the button is three
+-- times as expensive with it enabled.
+--
+-- UpdateManagement runs first so a paladin in mana or health recovery pre-casts
+-- the seal that recovery wants, not the damage one.
+function M:Prebuff(cfg)
+    if cfg.healMode then return false end
+    self:UpdateManagement(cfg)
+    local seal = self:DesiredOpenerSeal(cfg)
+    if seal and seal ~= "" and self:KnowsSpell(seal) and not self:HasBuff(seal)
+        and self:Affordable(seal) then
+        return self:Pick(seal, "pre-buff")
+    end
+
+    if cfg.spells.holyShield and self:KnowsSpell("Holy Shield")
+        and self:OwnCDReady("Holy Shield") and not self:HasBuff("Holy Shield")
+        and self:Affordable("Holy Shield") then
+        return self:Pick("Holy Shield", "pre-buff")
+    end
+    return false
+end
+
 -- Exorcism only works on Undead and Demon targets. The creature type cannot
 -- change under a given target, so it is resolved once per target rather than on
 -- every press - the check sits in the rotation's hot path and this is a plain
@@ -806,6 +879,58 @@ function M:TargetIsUndeadOrDemon()
         self.creatureTypeUD = (t == "Undead" or t == "Demon")
     end
     return self.creatureTypeUD
+end
+
+-- Is something hitting US right now? The mob we are fighting is the one that
+-- matters, and its target answers directly - one API call, no scanning.
+--
+-- Used for spell PUSHBACK: every hit taken during a cast delays it, which is
+-- what makes a cast-time execute a poor trade while you are being beaten on.
+function M:BeingAttacked()
+    return (UnitExists("targettarget") and UnitIsUnit("targettarget", "player")) and true or false
+end
+
+-- Seconds of setup between here and a Hammer of Wrath cast landing under
+-- Judgement of the Crusader, when that judgement is not up yet.
+--
+-- Counted honestly, because the whole decision rests on it:
+--   * Judgement's own remaining cooldown, which nothing can shorten
+--   * a global cooldown to put Seal of the Crusader on, unless it is already
+--     the seal being carried
+--   * a global cooldown for the Judgement itself, which CONSUMES the seal
+--   * a global cooldown to put the damage seal back on, or you swing bare
+--   * Hammer of Wrath's own cast time on top
+--
+-- The judgement debuff lasts ten seconds, so a setup of four to five seconds
+-- leaves room for one Hammer of Wrath, maybe two. On a normal mob at 20% health
+-- that arithmetic never closes - which is correct, and means this path is for
+-- elites and bosses by construction rather than by a special case.
+local GCD_EST = 1.5
+local HOW_CAST = 1.0
+function M:CrusaderSetupTime(cfg)
+    local gcds = 2   -- the judgement, and putting the damage seal back
+    if cfg.seals.damage ~= "Seal of the Crusader"
+        and not self:HasBuff("Seal of the Crusader") then
+        gcds = gcds + 1
+    end
+    return Aegis_SBR:OwnCDLeft("Judgement") + gcds * GCD_EST + HOW_CAST
+end
+
+-- Is the Seal of the Crusader detour worth taking before Hammer of Wrath?
+--
+-- Only with a measured time to kill, and only when it comfortably exceeds the
+-- setup. An unknown estimate is never a reason to act - the target simply gets
+-- the hammer straight away, which is the cheaper mistake.
+function M:CrusaderDetourWorthIt(cfg)
+    if not self:KnowsSpell("Seal of the Crusader") then return false end
+    if not self:KnowsSpell("Judgement") then return false end
+    local ttk = Aegis_SBR:TargetTTK()
+    if not ttk then return false end
+    -- Being hit stretches the hammer's cast through pushback, which eats into
+    -- the little uptime the detour buys in the first place.
+    local need = self:CrusaderSetupTime(cfg)
+    if self:BeingAttacked() then need = need + HOW_CAST end
+    return ttk > need
 end
 
 -- ============================================================
@@ -959,7 +1084,16 @@ end
 
 -- The units worth considering, with their raid index where they have one (so a
 -- subgroup filter can be applied) and whether they are a pet.
-function M:GroupUnits(withPets)
+-- Solofarming has no group to heal: the whole heal engine is pointed at the
+-- player and nothing else changes. Reusing the engine rather than writing a
+-- second one is the point - rank choice, Holy Judgement, Holy Shock and the
+-- overheal cancel all behave exactly as they do for a healer.
+function M:GroupUnits(withPets, cfg)
+    if cfg and cfg.spec == "solo" then return { "player" } end
+    return self:GroupUnitsAll(withPets)
+end
+
+function M:GroupUnitsAll(withPets)
     local units = {}
     local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
     if nr > 0 then
@@ -1074,18 +1208,44 @@ local HANDICAP_MAX = 50
 -- The two are independent positive signals and either one is enough.
 local AGGRO_UNITS_PARTY = 4
 local AGGRO_UNITS_RAID = 40
+
+-- Identity of a unit: its GUID where SuperWoW provides one, its name otherwise.
+-- A GUID is exact; a name is what 1.12 alone can offer.
+local function unitKey(u)
+    local ok, guid = UnitExists(u)
+    if guid then return guid end
+    return UnitName(u)
+end
+
 function M:ScanAggro(units)
-    -- Every visible enemy's victim, as a unit token. Hostility is decided by
-    -- UnitCanAttack rather than by "not a friendly player": that is the direct
-    -- question, and it also covers charmed players and hostile pets.
-    local victims, nv = {}, 0
+    -- Who each group member is, looked up once.
+    local keyOf, ofKey = {}, {}
+    for i = 1, table.getn(units) do
+        local u = units[i]
+        if UnitExists(u) then
+            local k = unitKey(u)
+            if k then keyOf[u] = k; ofKey[k] = u end
+        end
+    end
+
+    -- Every visible enemy's victim, matched straight back to a group member.
+    --
+    -- Matching by identity through a lookup, not by comparing every victim
+    -- against every member: that pairing cost eighty times forty comparisons per
+    -- scan in a full raid, four times a second, and was one of two places that
+    -- made this addon expensive exactly where frames are scarcest.
+    local hit = {}
     local function consider(enemy)
         if not UnitExists(enemy) then return end
         if UnitIsDead(enemy) then return end
         if not UnitCanAttack(enemy, "player") then return end
         local v = enemy .. "target"
-        if UnitExists(v) then nv = nv + 1; victims[nv] = v end
+        if not UnitExists(v) then return end
+        local k = unitKey(v)
+        local u = k and ofKey[k]
+        if u then hit[u] = (hit[u] or 0) + 1 end
     end
+
     consider("target")
     consider("mouseover")
     consider("pettarget")
@@ -1100,22 +1260,6 @@ function M:ScanAggro(units)
         for i = 1, AGGRO_UNITS_PARTY do
             consider("party" .. i .. "target")
             consider("partypet" .. i .. "target")
-        end
-    end
-
-    -- Matched by UNIT IDENTITY, not by name. Two players can share a name across
-    -- realms, a pet can carry its owner's, and a name lookup can come back empty
-    -- for a unit that is briefly out of range - none of which UnitIsUnit cares
-    -- about. Keyed by the unit token, which is what every caller passes in.
-    local hit = {}
-    for i = 1, table.getn(units) do
-        local u = units[i]
-        if UnitExists(u) then
-            local n = 0
-            for j = 1, nv do
-                if UnitIsUnit(victims[j], u) then n = n + 1 end
-            end
-            if n > 0 then hit[u] = n end
         end
     end
     self.aggroOn = hit
@@ -1235,7 +1379,7 @@ end
 
 function M:WorstHurt(ratio, cfg)
     local pets = cfg and (cfg.petPriority or 1) > 0
-    local units = self:GroupUnits(pets)
+    local units = self:GroupUnits(pets, cfg)
     if cfg and (cfg.healAggro or cfg.healPrecast) then self:SampleDanger(units) end
 
     -- Players and pets are judged separately, because a pet may only take the
@@ -1823,7 +1967,7 @@ function M:HolyStrikeDue(cfg)
     if not self:IsReady("Holy Strike") then return false end
     if not self:HealMeleeReady(cfg) then return false end
     local thr = (cfg.hsMinHP or 100) / 100
-    local units = self:GroupUnits()
+    local units = self:GroupUnits(false, cfg)
     local n = 0
     for i = 1, table.getn(units) do
         local u = units[i]
@@ -1853,6 +1997,47 @@ M.CURES = {
 }
 M.cureFail = {}
 
+-- The group, ordered the way the heal priority orders it: your friendly target
+-- first, then the priority list in its own order, then everyone else in roster
+-- order.
+--
+-- Dispelling reuses the list rather than carrying one of its own, because it is
+-- the same statement about the same people - a poison on the tank matters for
+-- the same reason a heal on the tank does. It is used whenever the list has
+-- entries; the heal-priority SWITCH governs the health handicap, which is a
+-- weighting and has no meaning for an affliction that is simply there or not.
+--
+-- Within one affliction type this decides who gets it first; the type order
+-- itself is decided in the core and comes first.
+function M:CureUnitOrder(cfg)
+    local units = self:GroupUnits(false, cfg)
+    local list = cfg.healPrioList
+    local wantTarget = cfg.healPrioTarget and UnitExists("target")
+        and UnitIsFriend("player", "target")
+    if not wantTarget and (not list or table.getn(list) == 0) then return units end
+
+    local out, taken = {}, {}
+    local function add(u)
+        if u and not taken[u] then taken[u] = true; table.insert(out, u) end
+    end
+
+    if wantTarget then
+        for i = 1, table.getn(units) do
+            if UnitExists(units[i]) and UnitIsUnit(units[i], "target") then add(units[i]) end
+        end
+    end
+    if list then
+        for r = 1, table.getn(list) do
+            for i = 1, table.getn(units) do
+                local u = units[i]
+                if UnitExists(u) and UnitName(u) == list[r] then add(u) end
+            end
+        end
+    end
+    for i = 1, table.getn(units) do add(units[i]) end
+    return out
+end
+
 -- Cure somebody, if there is nothing more pressing.
 --
 -- The threshold is a CROSSOVER, not an on/off: above it the affliction outranks
@@ -1864,7 +2049,7 @@ function M:CureStep(cfg, worst)
     if not self:GcdReady() or self:StillCasting() then return false end
     -- Somebody is hurt enough that the heal comes first.
     if worst and worst < ((cfg.curePct or 90) / 100) then return false end
-    local unit, spell = Aegis_SBR:PickCure(self:GroupUnits(false), self.CURES,
+    local unit, spell = Aegis_SBR:PickCure(self:CureUnitOrder(cfg), self.CURES,
         function(u) return self:Reachable(u) end, self.cureFail)
     if not unit or not spell then return false end
     if not self:Affordable(spell) then return false end
@@ -1900,11 +2085,37 @@ function M:PanicShield(cfg)
     return false
 end
 
+-- Lay on Hands on yourself, as the tank's last resort.
+--
+-- Not gated on Forbearance: Lay on Hands is not part of that group on this
+-- client, and if that ever changed the cast would simply fail without consuming
+-- the cooldown. It does drain your mana, which is why it sits below every other
+-- answer and behind a threshold you set yourself.
+function M:PanicLayOnHands(cfg)
+    if (cfg.tankLohPct or 0) <= 0 then return false end
+    if not self:KnowsSpell("Lay on Hands") then return false end
+    local mx = UnitHealthMax("player")
+    if not mx or mx <= 0 then return false end
+    if (UnitHealth("player") / mx) > (cfg.tankLohPct / 100) then return false end
+    if not self:OwnCDReady("Lay on Hands") then return false end
+    return Aegis_SBR:CastOnUnit("Lay on Hands", "player", "emergency")
+end
+
 function M:Rotate(cfg)
+    -- The panel writes `spec`; everything below branches on `healMode`. Deriving
+    -- it here rather than in the tab handler keeps the two in step no matter how
+    -- the profile was changed - slash command, tab click, or an imported profile.
+    if cfg.spec then cfg.healMode = (cfg.spec == "heal") end
+
     self:UpdateManagement(cfg)
 
-    -- Before anything else, in both modes.
+    -- Before anything else, in every mode.
+    --
+    -- The bubble first where it is set, because five minutes is a far cheaper
+    -- cooldown than an hour - but only the healer page offers it, and the tank
+    -- page offers Lay on Hands instead, for the reason recorded at tankLohPct.
     if self:PanicShield(cfg) then return end
+    if self:PanicLayOnHands(cfg) then return end
 
     -- Heal-mode trace. It has to sit HERE, above the heal branches, because every
     -- one of them returns - the strike/seal trace further down is unreachable for
@@ -2049,6 +2260,11 @@ function M:Rotate(cfg)
                 .. ((self:KnowsSpell("Crusader Strike") and self:Affordable("Crusader Strike")) and "C" or "-")
                 .. ((self:KnowsSpell("Holy Strike") and self:Affordable("Holy Strike")) and "H" or "-")
                 .. " mana=" .. UnitMana("player")
+                .. " how=" .. (self:TargetHPPct() <= 20 and (self:IsReady("Hammer of Wrath") and "rdy" or "cd") or "-")
+                .. " sotc=" .. (self:TargetHasJudgementDebuff("Seal of the Crusader") and "up" or "-")
+                .. " hit=" .. (self:BeingAttacked() and "Y" or "N")
+                .. " setup=" .. string.format("%.1fs", self:CrusaderSetupTime(cfg))
+                .. " ttk=" .. (Aegis_SBR:TargetTTK() and string.format("%.1fs", Aegis_SBR:TargetTTK()) or "?")
                 .. " veng=" .. self:TalentRank(TALENT_HOLY_MIGHT)
                 .. " rght=" .. self:TalentRank(TALENT_THREAT))
     end
@@ -2064,9 +2280,77 @@ function M:Rotate(cfg)
         end
     end
 
+    -- 0. Hammer of Wrath, ahead of everything else once the target is inside the
+    -- execute window. It has its own cooldown and a hard health gate, so a
+    -- missed window is simply gone - unlike a strike, which comes back.
+    --
+    -- Out of melee reach it goes straight out: there is nothing else this
+    -- rotation can do at that distance anyway.
+    --
+    -- In melee it first asks whether Judgement of the Crusader is on the target,
+    -- because that debuff amplifies the holy damage the hammer deals. If the
+    -- judgement is missing, the detour to apply it is taken ONLY when the target
+    -- is measurably going to live long enough to pay for it (see
+    -- CrusaderDetourWorthIt) - the seal work runs through HandleSeals below
+    -- rather than casting here, so the two cannot fight over which seal is on.
+    if not cfg.healMode and cfg.spells.hammerOfWrath
+        and self:KnowsSpell("Hammer of Wrath")
+        and self:TargetHPPct() <= 20 and self:IsReady("Hammer of Wrath")
+        and self:Affordable("Hammer of Wrath")
+        and Aegis_SBR:SpellReaches("Hammer of Wrath", "target") then
+        local melee = self:InMeleeRange()
+        local crusaderUp = self:TargetHasJudgementDebuff("Seal of the Crusader")
+        if not melee or crusaderUp or not self:CrusaderDetourWorthIt(cfg) then
+            if self:Pick("Hammer of Wrath", "execute") then return end
+        else
+            -- Worth the detour: hand the seal work to HandleSeals with the
+            -- crusader seal forced for this press, then come back next press and
+            -- the branch above fires with the debuff up.
+            if self:HandleSeals(cfg, "Seal of the Crusader") then return end
+        end
+    end
+
+    -- SOLOFARMING, and only here. Tank and DPS pass straight through.
+    --
+    -- Two things come before the damage, because both are what keep a paladin
+    -- standing in the middle of four mobs: healing yourself, and having Holy
+    -- Shield up. The damage itself is largely passive - Consecration, the aura
+    -- proc, the block - so nothing here competes with a global cooldown that
+    -- would otherwise have been a big hit.
+    if cfg.spec == "solo" then
+        -- Self-healing through the ordinary heal engine, aimed at the player
+        -- (see GroupUnits). Holy Shock, Flash of Light and Holy Light all reach
+        -- it, including the Holy Judgement speed-up.
+        if self:DoHeal(cfg) then return end
+
+        -- Holy Shield kept up rather than used on cooldown: block chance is
+        -- survival here, and the blocks are a damage source of their own.
+        if cfg.spells.holyShield and self:KnowsSpell("Holy Shield")
+            and not self:HasBuff("Holy Shield") and self:OwnCDReady("Holy Shield")
+            and self:Affordable("Holy Shield") then
+            if self:Pick("Holy Shield", "keep the block up") then return end
+        end
+    end
+
     -- 1. Strike (damage/tank mode only; heal mode has its own strike weaving,
     -- HealStrikeEngine/HolyStrikeDue, above)
-    if not cfg.healMode and self:StrikeEnabled(cfg) and self:SharedStrikeReady(cfg) then
+    --
+    -- Melee range is checked here and nowhere else in this chain: a strike is
+    -- the first thing the rotation reaches for, and Pick reports success as soon
+    -- as a spell is known and affordable - so at range every press was spent on
+    -- a swing that could not land, and the ranged abilities further down were
+    -- never reached at all.
+    --
+    -- On SOLOFARMING the strikes stop being a damage source and become one
+    -- thing: the way Holy Shock comes back. Holy Strike's returns to the paladin
+    -- himself are halved, and both strikes share a cooldown - so spending that
+    -- cooldown on anything other than the Crusader Strike reset costs the
+    -- self-heal it would have bought. HealStrikeEngine already expresses exactly
+    -- that rule, so it is used here rather than restated.
+    if cfg.spec == "solo" then
+        if self:HealStrikeEngine(cfg) then return end
+    elseif not cfg.healMode and self:InMeleeRange()
+        and self:StrikeEnabled(cfg) and self:SharedStrikeReady(cfg) then
         local pick = self:ResolveSharedCD(cfg)
         if pick and self:CastStrike(pick, cfg) then return end
     end
@@ -2090,7 +2374,12 @@ function M:Rotate(cfg)
     -- is not surfaced anywhere, so that reads as "it is off cooldown and simply
     -- not being cast". For a tank the AoE threat usually matters more than the
     -- mana it saves, hence the switch.
-    if not cfg.healMode and cfg.spells.consecration
+    --
+    -- Melee range is required even though Consecration takes no target: it burns
+    -- the ground around YOU, so cast at thirty yards it lands on empty floor and
+    -- still spends the press - which is how it used to block every ranged
+    -- ability below it.
+    if not cfg.healMode and cfg.spells.consecration and self:InMeleeRange()
         and (not self.manaMgmtActive or cfg.consecInMana)
         and self:KnowsSpell("Consecration") and self:IsReady("Consecration") then
         if self:Pick("Consecration", "AoE") then return end
@@ -2098,12 +2387,9 @@ function M:Rotate(cfg)
     -- 3. Seal upkeep and judgement (damage/tank mode only; heal mode runs its
     -- own Seal of Wisdom upkeep via HealSeals above)
     if not cfg.healMode and self:HandleSeals(cfg) then return end
-    -- 4. Hammer of Wrath as execute (damage/tank mode only)
-    if not cfg.healMode and cfg.spells.hammerOfWrath and self:TargetHPPct() <= 20 and self:IsReady("Hammer of Wrath") then
-        if self:Pick("Hammer of Wrath", "execute") then return end
-    end
     -- 5. Repentance (boss damage proc on Turtle) (damage/tank mode only)
-    if not cfg.healMode and cfg.spells.repentance and self:IsReady("Repentance") then
+    if not cfg.healMode and cfg.spells.repentance and self:IsReady("Repentance")
+        and Aegis_SBR:SpellReaches("Repentance", "target") then
         if self:Pick("Repentance", "control") then return end
     end
     -- 6. Exorcism, a strong nuke but only against Undead and Demon targets.
@@ -2111,7 +2397,8 @@ function M:Rotate(cfg)
     -- (damage/tank mode only)
     if not cfg.healMode and cfg.spells.exorcism and not self.manaMgmtActive
         and self:KnowsSpell("Exorcism") and self:TargetIsUndeadOrDemon()
-        and self:IsReady("Exorcism") then
+        and self:IsReady("Exorcism") and Aegis_SBR:SpellReaches("Exorcism", "target")
+        and self:Affordable("Exorcism") then
         if self:Pick("Exorcism", "undead or demon") then return end
     end
 end
@@ -2260,8 +2547,14 @@ function M:HandleCommand(cmd, t)
         local cfg = Aegis_SBR:GetActiveProfile()
         if not cfg then return true end
         local a = string.lower(t[2] or "")
-        if a == "on" then cfg.healMode = true; msgOut("heal mode on.")
-        elseif a == "off" then cfg.healMode = false; msgOut("heal mode off.")
+        -- Writes `spec`, not `healMode`: the rotation derives healMode from spec
+        -- on every press, so setting it here alone would be undone immediately.
+        -- Switching off returns to Retribution, which is the default melee page.
+        if a == "on" then cfg.spec = "heal"; cfg.healMode = true; msgOut("heal mode on.")
+        elseif a == "off" then
+            if cfg.spec == "heal" then cfg.spec = "retri" end
+            cfg.healMode = false
+            msgOut("heal mode off (" .. cfg.spec .. ").")
         else msgOut("heal mode is " .. (cfg.healMode and "on" or "off") .. ". Use /sbr heal on or off.") end
         return true
     end

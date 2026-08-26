@@ -46,6 +46,101 @@ Priority is expressed as a **health handicap**, and the rule it now obeys is tha
 reorder the queue but never remove somebody from it — eligibility reads real health, ranking
 reads adjusted health.
 
+### ✨ Paladin: four pages instead of two
+
+**Tank · Solofarming · DPS · Healer.** The panel writes a `spec` field and `healMode` is derived
+from it, so every rotation branch that reads `healMode` kept working untouched.
+
+**Solofarming** is the new one, for the Holy/Protection hybrid that keeps itself alive while
+killing several things at once. It is not a fourth rotation: it is the melee chain with two
+steps folded in ahead of the damage, because both are what let a paladin stand in the middle of
+four mobs.
+
+- **Self-healing through the ordinary heal engine**, aimed at nobody but the player. Rank
+  choice, Holy Shock, the Holy Judgement speed-up and the overheal cancel all behave exactly as
+  they do for a healer — one engine, not a second one written to look like it.
+- **Holy Shield is kept up** rather than used on cooldown: the block chance is the survival, and
+  the blocks are their own damage.
+- **The strikes stop being a damage source.** Holy Strike's returns to the paladin are halved,
+  and both strikes share one cooldown — so spending it on anything but bringing Holy Shock back
+  costs the self-heal it would have bought. The damage comes from Consecration, the aura proc
+  and the blocks.
+
+**Emergency buttons.** Below a health share you choose, everything stops: *Divine Shield* on the
+DPS and Solofarming pages, *Lay on Hands* on Tank and DPS. The tank page deliberately does not
+offer the bubble — it drops every point of threat, so the emergency that saves the tank hands
+the pull to somebody who cannot survive it. On DPS both are available and the shield goes first,
+five minutes being a far cheaper cooldown than an hour.
+
+### ✨ Hammer of Wrath, and a rotation that stopped swinging at thirty yards
+
+Hammer of Wrath now leads the priority once the target is inside the execute window: it has a
+hard health gate and its own cooldown, so a missed window is simply gone. Out of melee reach it
+fires immediately. In melee it first asks whether *Judgement of the Crusader* is on the target,
+since that amplifies the holy damage — and takes the detour to apply it **only** when the
+measured time to kill exceeds the setup, counted honestly: Judgement's remaining cooldown, the
+global cooldowns for the seal, the judgement and putting the damage seal back, and the hammer's
+own cast. The judgement lasts ten seconds, so on a normal mob that arithmetic never closes,
+which is correct — the path is for elites by construction rather than by a special case.
+
+Underneath it, **the whole damage chain learned about range.** Nothing between the strike and
+Exorcism had checked it, and `Pick` reports success as soon as a spell is known and affordable,
+so at thirty yards every press was spent on a swing that could not land — with the ranged
+abilities below never reached at all. Two of them were doing it silently: *Consecration* takes
+no target but burns the ground around **you**, and *Judgement* reaches about ten yards while the
+seal in front of it is a self buff that always went up.
+
+### ✨ Buffs before the pull
+
+A paladin no longer waits for a target to put its seal on. The core holds a melee module back
+until there is something to hit, and the module's own opener sat behind that same guard — so the
+seal went up **on contact**, costing a global cooldown at the one moment it is worth the most.
+
+A separate `Prebuff` hook now runs with nobody targeted. Deliberately separate from
+`RunsWithoutTarget`, which also decides whether auto-acquire fires: answering "yes, run me"
+there would stop a melee class picking up a target at all.
+
+*Holy Shield* is pre-cast too, and that one is free rather than merely useful: its cooldown
+equals its duration, so arriving inside the ten seconds finds it up, and arriving later finds
+the cooldown expired with it. The only thing that breaks the symmetry is blocks being consumed
+early, which cannot happen while nobody is hitting you.
+
+### ✨ Priority lists for every healer, and the mage
+
+The paladin's heal priority is now shared: **Priest, Druid and Shaman** get the same list, and
+the **Mage** gets it for decursing. The list lives in the core so five classes cannot drift apart
+on what "priority" means.
+
+Each module keeps its own way of choosing, and the handicap is expressed in that module's own
+currency — the priest ranks by percentage and is padded in points, the druid and shaman rank by
+absolute deficit and have that deficit discounted. Everywhere the same rule holds: **eligibility
+reads real health, only the order is adjusted.** A handicap may move somebody down the queue; it
+can never remove them from it.
+
+The Mage's decursing is new in itself: *Remove Lesser Curse* on a cursed group member, above the
+damage rotation, cast without changing your target. No health threshold there — a curse is on
+somebody or it is not.
+
+### 🐛 Fixed — two loops that only hurt at raid size
+
+Both were invisible in a five-man and ruinous in a forty-man, which is exactly how they were
+found:
+
+- `PickCure` read every group member's debuffs **once per affliction type** — four full passes
+  over the raid, better than six thousand `UnitDebuff` calls per press, four times a second. It
+  reads them once now.
+- `ScanAggro` compared every enemy's victim against every group member with `UnitIsUnit`, more
+  than three thousand comparisons per scan. Each unit is identified once by GUID and the victim
+  looked up directly — same precision, a fortieth of the work.
+
+### 🔧 `/sbr probe` now records frame rate and rotation cost
+
+`fps=62 presses=23 (4.6/s) rot_avg=0.31ms rot_max=1.20ms group=40`, one line every five seconds,
+summarised by `scripts/read_probe.py`. It answers the only question worth asking when frames
+collapse: is the addon slow, or is everything slow? Built because reproducing a forty-man raid
+to test something is not a thing anybody can do on request — so the measurement rides along on a
+raid you were going to run anyway.
+
 ### ✨ Dispelling, for all four healers
 
 A **Dispel** section in the Paladin, Priest, Druid and Shaman panels: one switch, and a

@@ -87,6 +87,32 @@ def report(path):
         print("\n-- %s (%d) --" % (cat, len(rows)))
         for t, line in rows:
             print("  %8.2f  %s" % (t, line))
+        if cat == "perf":
+            # The question this answers: is the addon slow, or is everything
+            # slow? A high rotation cost with a low frame rate points at us; a
+            # low cost with a low frame rate points anywhere else.
+            fps, avg, mx, grp = [], [], [], []
+            for _, l in rows:
+                m = re.search(r"fps=(\d+)", l)
+                if m: fps.append(int(m.group(1)))
+                m = re.search(r"rot_avg=([\d.]+)ms", l)
+                if m: avg.append(float(m.group(1)))
+                m = re.search(r"rot_max=([\d.]+)ms", l)
+                if m: mx.append(float(m.group(1)))
+                m = re.search(r"group=(\d+)", l)
+                if m: grp.append(int(m.group(1)))
+            if fps:
+                fps.sort()
+                print("    frame rate   min %d  median %d  max %d"
+                      % (fps[0], fps[len(fps) // 2], fps[-1]))
+            if avg:
+                avg.sort()
+                print("    rotation     median %.2f ms per press, worst sample %.2f ms"
+                      % (avg[len(avg) // 2], max(mx) if mx else 0))
+            if grp:
+                print("    group size   %d .. %d" % (min(grp), max(grp)))
+            continue
+
         if cat == "range":
             # The proxy is CheckInteractDistance(3), a ~9.9yd MELEE test. Comparing
             # it against a 30yd nuke trivially "disagrees" at any range past 9.9,

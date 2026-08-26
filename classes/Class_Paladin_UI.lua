@@ -20,20 +20,33 @@ local function setBlockEnabled(cbItem, sLow, sHigh, on, reason)
 end
 
 M.useScrollLayout = true
--- Damage | Healer rail. The rotation's only real branch is healMode (attack vs.
--- heal), so the two tabs bind to that boolean via encode/decode. Ret and Prot
--- both live on Damage (they differ only by the seals/strikes below, not by the
--- rotation), so the spec names live in the tooltips rather than the labels.
+-- Tank | Retribution | Healer rail.
+--
+-- The tab writes `spec`, and `healMode` is derived from it at the top of the
+-- rotation - so every existing `cfg.healMode` branch keeps working untouched
+-- while the panel gains a third page.
+--
+-- STEP ONE, deliberately: Tank, Solofarming and DPS show the SAME sections.
+-- Nothing about the rotation differs between them yet. Splitting the pages first
+-- and the behaviour second means the layout can be judged on its own, before any
+-- rotation change is in the way of reading it.
+--
+-- The internal key for the DPS page stays "retri", so profiles written before
+-- the rename keep working; only the label changed.
 M.specTabs = {
-    field = "healMode", default = "damage",
-    encode = function(key) return key == "heal" end,          -- key -> healMode boolean
-    decode = function(v) return v and "heal" or "damage" end,  -- boolean -> tab key
+    field = "spec", default = "retri",
     tabs = {
-        { key = "damage", label = "Tank / Damage",
-          sub  = "This tab is also the active mode. While it is active, all Healer settings are ignored.",
-          tip1 = "Retribution and Protection melee rotation.", tip2 = "Selecting this tab also makes it the active mode." },
-        { key = "heal",   label = "Healer",
-          sub  = "This tab is also the active mode. While it is active, all Tank / Damage settings are ignored.",
+        { key = "tank",  label = "Tank",
+          sub  = "This tab is also the active mode. Protection: threat, mitigation, block.",
+          tip1 = "Protection melee rotation.", tip2 = "Selecting this tab also makes it the active mode. All three melee pages are still identical - the differences come next." },
+        { key = "solo",  label = "Solofarming",
+          sub  = "This tab is also the active mode. Solo: kill things without a healer behind you.",
+          tip1 = "Questing and farming on your own.", tip2 = "Selecting this tab also makes it the active mode. All three melee pages are still identical - the differences come next." },
+        { key = "retri", label = "DPS",
+          sub  = "This tab is also the active mode. Group damage: seals, judgement, strikes.",
+          tip1 = "Group damage melee rotation.", tip2 = "Selecting this tab also makes it the active mode. All three melee pages are still identical - the differences come next." },
+        { key = "heal",  label = "Healer",
+          sub  = "This tab is also the active mode. While it is active, the melee settings are ignored.",
           tip1 = "Holy one-button group healing.", tip2 = "Selecting this tab also makes it the active mode." },
     },
 }
@@ -46,11 +59,42 @@ function M:BuildBody(ui, parent)
     local function set(field)  return function(v) if ui.buf then ui.buf[field] = v; ui:Refresh() end end end
     local function sset(key)   return function(v) if ui.buf then ui.buf.spells[key] = v; ui:Refresh() end end end
 
-    L:Header("Seals", "damage")
+    -- Tank: Lay on Hands only. A bubble drops every point of threat, so it is
+    -- not offered here at all - see the tooltip.
+    L:Header("Emergency", "tank")
+    self.lohRow = L:Row{ label = "Lay on Hands below", spell = "Lay on Hands",
+        slider = { key = "tankLohPct", min = 0, max = 50, step = 5, suffix = "%", onChange = set("tankLohPct") } }
+
+    -- DPS: both, each with its own threshold and either one usable alone. The
+    -- bubble goes first because five minutes is a far cheaper cooldown than an
+    -- hour; Lay on Hands takes over while it is down. That order is the
+    -- rotation's, not this panel's - the two steps simply run in it.
+    --
+    -- The same two profile fields as the tank and healer pages, so a profile
+    -- carries one threshold per spell no matter which page set it.
+    L:Header("Emergency", { retri = true, solo = true })
+    self.panicDpsRow = L:Row{ label = "Divine Shield below", spell = "Divine Shield",
+        slider = { key = "panicPct", min = 0, max = 60, step = 5, suffix = "%", onChange = set("panicPct") } }
+    self.lohDpsRow = L:Row{ label = "Lay on Hands below", spell = "Lay on Hands",
+        slider = { key = "tankLohPct", min = 0, max = 50, step = 5, suffix = "%", onChange = set("tankLohPct") } }
+
+    -- Solofarming keeps itself alive with the same heal engine the healer page
+    -- uses, aimed at nobody but you - so the controls are the same ones, and
+    -- they write the same profile fields.
+    L:Header("Self-healing", "solo")
+    self.selfSoloRow = L:Row{ label = "Heal yourself below",
+        slider = { key = "healSelfPct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("healSelfPct") } }
+    self.hsSoloRow = L:Row{ key = "useHolyShock", label = "Holy Shock below", spell = "Holy Shock", onToggle = set("useHolyShock"),
+        slider = { key = "holyShockPct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("holyShockPct") } }
+    self.ratioSoloRow = L:Row{ label = "Holy Light below",
+        slider = { key = "ratioHealthy", min = 0, max = 100, step = 5, suffix = "%", onChange = set("ratioHealthy") } }
+    self.reloadSoloRow = L:Row{ key = "healReloadCS", label = "Strike only to reset Holy Shock", onToggle = set("healReloadCS") }
+
+    L:Header("Seals", { tank = true, solo = true, retri = true })
     self.debuffDD = L:Dropdown("seal_debuff", "Debuff", 200, function(v) if ui.buf then ui.buf.seals.debuff = v; ui:Refresh() end end)
     self.damageDD = L:Dropdown("seal_damage", "Damage", 200, function(v) if ui.buf then ui.buf.seals.damage = v; ui:Refresh() end end)
 
-    L:Header("Strikes", "damage")
+    L:Header("Strikes", { tank = true, solo = true, retri = true })
     self.spellCB = {}
     -- Two toggles drive the strikes. One alone means exactly that strike; both
     -- on reveals the strategy dropdown below.
@@ -59,7 +103,7 @@ function M:BuildBody(ui, parent)
     self.strikeStyleDD, self.strikeStyleLbl = L:Dropdown("strikeStyle", "Both on", 190, set("strikeStyle"))
     self.downrankRow = L:Row{ key = "strikeDownrank", label = "Downrank when low", onToggle = set("strikeDownrank") }
 
-    L:Header("Spells", "damage")
+    L:Header("Spells", { tank = true, solo = true, retri = true })
     self.spellCB.holyShield = L:Row{ key = "holyShield", label = "Holy Shield", spell = "Holy Shield", onToggle = sset("holyShield") }
     self.spellCB.hammerOfWrath = L:Row{ key = "hammerOfWrath", label = "Hammer of Wrath", spell = "Hammer of Wrath", onToggle = sset("hammerOfWrath") }
     self.spellCB.repentance = L:Row{ key = "repentance", label = "Repentance", spell = "Repentance", onToggle = sset("repentance") }
@@ -68,7 +112,7 @@ function M:BuildBody(ui, parent)
     self.spellCB.exorcism = L:Row{ key = "exorcism", label = "Exorcism", spell = "Exorcism", onToggle = sset("exorcism") }
     self.twistRow = L:Row{ key = "sealTwist", label = "Seal twisting", onToggle = set("sealTwist") }
 
-    L:Header("Mana management", "damage")
+    L:Header("Mana management", { tank = true, solo = true, retri = true })
     self.manaRow = L:Row{ key = "manaManage", label = "Mana management", spell = "Seal of Wisdom", onToggle = set("manaManage") }
     self.manaLowRow = L:Row{ label = "Switch below",
         slider = { key = "manaLow", min = 0, max = 100, step = 5, suffix = "%", onChange = set("manaLow") } }
@@ -78,7 +122,7 @@ function M:BuildBody(ui, parent)
         slider = { key = "manaWeaveMin", min = 0, max = 100, step = 5, suffix = "%", onChange = set("manaWeaveMin") } }
     self.wisdomRow = L:Row{ key = "manaWisdomDebuff", label = "Wisdom debuff in mana mode", onToggle = set("manaWisdomDebuff") }
 
-    L:Header("HP management", "damage")
+    L:Header("HP management", { tank = true, solo = true, retri = true })
     self.hpRow = L:Row{ key = "hpManage", label = "HP management", spell = "Seal of Light", onToggle = set("hpManage") }
     self.hpLowRow = L:Row{ label = "Switch below",
         slider = { key = "hpLow", min = 0, max = 100, step = 5, suffix = "%", onChange = set("hpLow") } }
@@ -109,7 +153,7 @@ function M:BuildBody(ui, parent)
     self.curePctRow = L:Row{ label = "Cure first above",
         slider = { key = "curePct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("curePct") } }
 
-    L:Header("Ranks", "heal")
+    L:Header("Ranks", { heal = true, solo = true })
     self.folMaxRow = L:Row{ label = "Flash of Light max rank",
         slider = { key = "folMaxRank", min = 1, max = 7, step = 1, suffix = "", onChange = set("folMaxRank") } }
     self.folMinRow = L:Row{ label = "Flash of Light min rank",
@@ -208,6 +252,13 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.cureRow.cb, "Cure afflictions", "Remove curses, poisons, diseases and magic from the group with whatever your class has for it - here: Poison, Disease and Magic (Cleanse), or Poison and Disease (Purify).", "Off by default. A dispel costs a global cooldown that would otherwise be a heal, and only what you can actually remove is ever considered.")
     ui:Tip(self.curePctRow.slider, "Cure first above", "The crossover between curing and healing, read off the WORST-HURT member. Above it the affliction comes first; below it the heal does.", "At 90 the group is cleansed first and topped up from 90 to 100 afterwards - the right order when the affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield, 100 makes it always come first.")
 
+    ui:Tip(self.panicDpsRow.slider, "Divine Shield below", "Below this share of your health, everything stops and Divine Shield goes up. 0 is off.", "Tried first, because five minutes is a far cheaper cooldown than an hour. Skipped while Forbearance is on you or one is already up, and Lay on Hands below then takes over. Note it drops your threat - which is a feature here and the reason the tank page does not offer it.")
+    ui:Tip(self.lohDpsRow.slider, "Lay on Hands below", "Below this share of your health, Lay on Hands is cast on yourself. 0 is off.", "The deeper of the two: it heals you to full and costs no threat, but drains all your mana and runs on an hour's cooldown. Set it lower than the shield above, so it is only reached once the cheap answer is unavailable.")
+    ui:Tip(self.lohRow.slider, "Lay on Hands below", "Below this share of your own health, Lay on Hands is cast on yourself before anything else. 0 is off.", "The tank's version of the healer's emergency bubble, and deliberately a different spell: a bubble drops every point of threat you have built, which hands the pull to somebody who cannot survive it. Lay on Hands costs no threat - it does cost all your mana, which is why it sits behind a threshold you set yourself.")
+    ui:Tip(self.selfSoloRow.slider, "Heal yourself below", "Below this share of your health the rotation heals you instead of hitting things. 0 never heals.", "The same engine the healer page uses, aimed at nobody but you - so Holy Shock, Flash of Light and Holy Light are all chosen the same way, Holy Judgement's speed-up included.")
+    ui:Tip(self.hsSoloRow.cb, "Holy Shock below", "Holy Shock as the instant self-heal, for when a cast would arrive too late.", "It cannot be pushed back, which is what makes it the answer while four things are hitting you. The strike setting below exists to keep it coming back.")
+    ui:Tip(self.ratioSoloRow.slider, "Holy Light below", "Holy Light is only used under this health, and only when no Flash of Light is big enough to cover the deficit.", "Your talents cut pushback by most of it, so a cast heal is a real option here rather than a gamble.")
+    ui:Tip(self.reloadSoloRow.cb, "Strike only to reset Holy Shock", "Crusader Strike is used when - and only when - Holy Shock is on cooldown and Blessed Strikes can bring it back.", "Farming, the strikes are not a damage source: Holy Strike's returns to you are halved and both strikes share one cooldown, so spending it on anything but the reset costs you the self-heal it would have bought. The damage comes from Consecration, the aura proc and your blocks.")
     ui:Tip(self.debuffDD, "Debuff seal", "Judged once to apply its debuff to the target.", "Autoattacks keep the debuff up afterwards.")
     ui:Tip(self.damageDD, "Damage seal", "Judged continuously for damage.", "Leaves no debuff, so it never overwrites the one above.")
 
@@ -443,13 +494,42 @@ function M:RefreshBody(ui, buf)
     for i = 1, table.getn(self.groupBtns) do
         self.groupBtns[i].value:SetText(skip[i] and "|cffff8844skipped|r" or "|cff44ff44healed|r")
     end
-    local pv = buf.panicPct or 0
-    self.panicRow.slider:SetValue(pv)
-    if self.panicRow.slider.valText then
-        self.panicRow.slider.valText:SetText(pv > 0 and ("<" .. pv .. "%") or "off")
+    -- Two rows per field: the tank page and the DPS page write the same profile
+    -- values, so both copies follow it.
+    local lohv = buf.tankLohPct or 0
+    local lohRows = { self.lohRow, self.lohDpsRow }
+    for i = 1, table.getn(lohRows) do
+        local row = lohRows[i]
+        row.slider:SetValue(lohv)
+        if row.slider.valText then
+            row.slider.valText:SetText(lohv > 0 and ("<" .. lohv .. "%") or "off")
+        end
     end
 
+    local pv = buf.panicPct or 0
+    local panicRows = { self.panicRow, self.panicDpsRow }
+    for i = 1, table.getn(panicRows) do
+        local row = panicRows[i]
+        row.slider:SetValue(pv)
+        if row.slider.valText then
+            row.slider.valText:SetText(pv > 0 and ("<" .. pv .. "%") or "off")
+        end
+    end
+
+    ui:BindCheck(self.hsSoloRow, buf.useHolyShock, "Holy Shock")
+    ui:BindCheck(self.reloadSoloRow, buf.healReloadCS)
+    local hsp = buf.holyShockPct or 50
+    self.hsSoloRow.slider:SetValue(hsp)
+    if self.hsSoloRow.slider.valText then self.hsSoloRow.slider.valText:SetText("<" .. hsp .. "%") end
+    local rhs = buf.ratioHealthy or 60
+    self.ratioSoloRow.slider:SetValue(rhs)
+    if self.ratioSoloRow.slider.valText then self.ratioSoloRow.slider.valText:SetText("<" .. rhs .. "%") end
+
     local selfv = buf.healSelfPct or 40
+    self.selfSoloRow.slider:SetValue(selfv)
+    if self.selfSoloRow.slider.valText then
+        self.selfSoloRow.slider.valText:SetText(selfv > 0 and ("<" .. selfv .. "%") or "off")
+    end
     self.selfRow.slider:SetValue(selfv)
     if self.selfRow.slider.valText then
         self.selfRow.slider.valText:SetText(selfv > 0 and ("<" .. selfv .. "%") or "off")
