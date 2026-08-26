@@ -30,6 +30,7 @@ local caps = {
     range    = false,   -- C_Spell.IsSpellInRange: true geometric range
     cooldown = false,   -- C_Spell.GetSpellCooldown by spell id
     totems   = false,   -- GetTotemInfo + PLAYER_TOTEM_UPDATE
+    creature = false,   -- UnitCreatureID: the creature-template id behind a unit
     loc      = false,   -- C_LossOfControl: stun / silence / school lockout
     timer    = false,   -- C_Timer.After
     encoding = false,   -- C_EncodingUtil: profile import/export (roadmap P3)
@@ -53,6 +54,7 @@ function Aegis_SBR:DetectClassicAPI()
         caps.range    = (C_Spell and C_Spell.IsSpellInRange) and true or false
         caps.cooldown = (C_Spell and C_Spell.GetSpellCooldown) and true or false
         caps.totems   = (GetTotemInfo ~= nil)
+        caps.creature = (UnitCreatureID ~= nil)
         caps.loc      = (C_LossOfControl
                          and C_LossOfControl.GetActiveLossOfControlDataCount
                          and C_LossOfControl.GetActiveLossOfControlData) and true or false
@@ -233,6 +235,28 @@ function Aegis_SBR:TotemRemaining(name)
 end
 
 -- ============================================================
+-- Creature identity
+-- ============================================================
+-- The creature-TEMPLATE id: every Kobold Geomancer in the world shares one, and
+-- it is stable across sessions. That is the difference between learning
+-- something about the mob in front of you and learning it about the KIND of mob
+-- - a lesson worth keeping is worth keeping past this one corpse.
+--
+-- Vanilla packs the entry id into bits 24-47 of a creature GUID, so this is a
+-- read, not a cache lookup. nil for players (a player GUID carries no template),
+-- for an empty token, and when ClassicAPI is absent.
+function Aegis_SBR:UnitCreatureID(unit)
+    if not self:Capability("creature") then return nil end
+    unit = unit or "target"
+    if not UnitExists(unit) then return nil end
+    -- pcall'd: a garbage token raises, and this is called from rotation gates
+    -- where an error would take the whole press down.
+    local ok, id = pcall(UnitCreatureID, unit)
+    if ok and type(id) == "number" and id > 0 then return id end
+    return nil
+end
+
+-- ============================================================
 -- Loss of control
 -- ============================================================
 -- Returns seconds remaining for the first active effect of locType, or nil.
@@ -279,6 +303,7 @@ local CAP_ORDER = {
     { "range",    "exact spell range (incl. min range)" },
     { "cooldown", "spell cooldown by id" },
     { "totems",   "totem tracking + destruction" },
+    { "creature", "creature-template id (per mob type, not per mob)" },
     { "loc",      "stun / silence / school lockout" },
     { "timer",    "deferred callbacks" },
     { "encoding", "profile import/export" },
