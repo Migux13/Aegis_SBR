@@ -14,7 +14,7 @@
 --    drops its cast time, and makes it cleave a line), or optionally on
 --    cooldown if you turn the proc-only guard off.
 --  * MELEE (Survival / BM-melee): Aspect of the Wolf, melee auto-attack,
---    Raptor Strike on cooldown, Mongoose Bite reactively after you dodge,
+--    Raptor Strike and Mongoose Bite on cooldown,
 --    optional Wing Clip. Survival can also drop Immolation Trap on cooldown
 --    in combat (a 1.18.1 change) and weave shots.
 --  * Mana aspect swap: at a low-mana threshold the rotation swaps to the
@@ -39,7 +39,6 @@ local function msgOut(text, r, g, b) Aegis_SBR:Msg(text, r, g, b) end
 local floor = math.floor
 
 local MEND_PET_CD = 12   -- Mend Pet HoT lasts ~15s, refresh a little early
-local REACT_WINDOW = 5.0 -- Mongoose Bite stays usable ~5s after a dodge
 local PETCRIT_WINDOW = 4.0
 local MANA_ASPECT_HYST = 15   -- swap back to the combat aspect this far above the low mark
 -- Steady Shot weave margin: it must finish this far before the next Auto Shot
@@ -757,7 +756,7 @@ function M:Rotate(cfg)
             .. " auto=" .. (self:AutoShotting() and "Y" or (self.autoShotOn and "assumed" or "N"))
             .. " steady=" .. (cfg.useSteadyShot and (self:SteadyReady() and "ready" or "wait") .. "/" .. self:WeaveSource() or "-")
             .. " manaAsp=" .. (self.manaAspectActive and "Y" or "n")
-            .. " mongoose=" .. ((now < (self.dodgeUntil or 0)) and "Y" or "n")
+            .. " mongoose=" .. (self:IsReady("Mongoose Bite") and "rdy" or "cd")
             .. " elite=" .. (isElite and "Y" or "N"))
     end
 
@@ -888,16 +887,15 @@ function M:Rotate(cfg)
         if aoe and cfg.useCarve and self:KnowsSpell("Carve") and self:IsReady("Carve") then
             if self:Pick("Carve", "AoE cleave") then return end
         end
-        -- Mongoose Bite reactively after we dodge an enemy attack.
+        -- Mongoose Bite, plainly on its own cooldown.
+        --
+        -- It was gated on a five second window after DODGING an enemy attack,
+        -- which is the vanilla rule and not this client's: here it is an ordinary
+        -- instant melee attack, 30 mana, five seconds. The gate meant it almost
+        -- never fired, and the dodge tracker that fed it is gone with it.
         if cfg.useMongooseBite and self:KnowsSpell("Mongoose Bite")
-            and now < (self.dodgeUntil or 0) and self:IsReady("Mongoose Bite") then
-            -- The window is consumed only if the bite actually goes out, and
-            -- only on a real press - clearing it during a preview would throw
-            -- the proc away without using it.
-            if self:Pick("Mongoose Bite", "dodge window") then
-                self:Later(function() self.dodgeUntil = 0 end)
-                return
-            end
+            and self:IsReady("Mongoose Bite") then
+            if self:Pick("Mongoose Bite", "on cooldown") then return end
         end
         -- Lacerate bleed upkeep (Turtle Survival): apply/refresh when it falls off.
         if cfg.useLacerate and self:KnowsSpell("Lacerate") then
@@ -1043,12 +1041,11 @@ end
 -- ============================================================
 -- Event tracking: precise Auto Shot / Steady Shot timing from SuperWoW's
 -- UNIT_CASTEVENT (arg1 casterGUID, arg3 type, arg4 spell id, arg5 cast ms),
--- the Auto Shot reset on leaving combat, the Mongoose Bite dodge window, and
--- the pet-crit window for Baited Shot.
+-- the Auto Shot reset on leaving combat, and the pet-crit window for Baited
+-- Shot.
 -- ============================================================
 local hunterFrame = CreateFrame("Frame")
 hunterFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-hunterFrame:RegisterEvent("CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES")  -- enemy attacks we avoided
 hunterFrame:RegisterEvent("CHAT_MSG_COMBAT_PET_HITS")                 -- our pet's damage
 hunterFrame:RegisterEvent("UNIT_CASTEVENT")                           -- SuperWoW: exact cast/shot timing
 -- A resisted, missed or immune shot of ours is reported here. Without it those
@@ -1066,10 +1063,6 @@ hunterFrame:SetScript("OnEvent", function()
         M.stingImmune = {}
         M.stingTry = nil
         M.stingQueuedT = nil
-    elseif event == "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES" then
-        if arg1 and string.find(string.lower(arg1), "dodge") then
-            M.dodgeUntil = GetTime() + REACT_WINDOW
-        end
     elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
         -- "Your Serpent Sting was resisted by X." / "... missed X." The throttle
         -- exists to stop a second cast while the first is still registering on
