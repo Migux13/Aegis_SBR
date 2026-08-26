@@ -103,6 +103,12 @@ function M:BuildBody(ui, parent)
         if ui.buf then M:ToggleHPS(ui.buf); ui:Refresh() end
     end }
 
+
+    L:Header("Dispel", "heal")
+    self.cureRow = L:Row{ key = "useCure", label = "Cure afflictions", spell = "Cleanse", onToggle = set("useCure") }
+    self.curePctRow = L:Row{ label = "Cure first above",
+        slider = { key = "curePct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("curePct") } }
+
     L:Header("Ranks", "heal")
     self.folMaxRow = L:Row{ label = "Flash of Light max rank",
         slider = { key = "folMaxRank", min = 1, max = 7, step = 1, suffix = "", onChange = set("folMaxRank") } }
@@ -198,6 +204,9 @@ function M:BuildBody(ui, parent)
     self.healJudgeHLRow   = L:Row{ key = "healJudgeHL",   label = "Pre-load Holy Judgement",     spell = "Judgement", onToggle = set("healJudgeHL") }
 
     L:Finish()
+
+    ui:Tip(self.cureRow.cb, "Cure afflictions", "Remove curses, poisons, diseases and magic from the group with whatever your class has for it - here: Poison, Disease and Magic (Cleanse), or Poison and Disease (Purify).", "Off by default. A dispel costs a global cooldown that would otherwise be a heal, and only what you can actually remove is ever considered.")
+    ui:Tip(self.curePctRow.slider, "Cure first above", "The crossover between curing and healing, read off the WORST-HURT member. Above it the affliction comes first; below it the heal does.", "At 90 the group is cleansed first and topped up from 90 to 100 afterwards - the right order when the affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield, 100 makes it always come first.")
 
     ui:Tip(self.debuffDD, "Debuff seal", "Judged once to apply its debuff to the target.", "Autoattacks keep the debuff up afterwards.")
     ui:Tip(self.damageDD, "Damage seal", "Judged continuously for damage.", "Leaves no debuff, so it never overwrites the one above.")
@@ -472,6 +481,13 @@ function M:RefreshBody(ui, buf)
         self.healManaSelfRow.cb:Disable()
         self.healManaJudgeRow.cb:Disable()
     end
+
+    ui:BindCheck(self.cureRow, buf.useCure, "Cleanse")
+    local cpv = buf.curePct or 90
+    self.curePctRow.slider:SetValue(cpv)
+    if self.curePctRow.slider.valText then self.curePctRow.slider.valText:SetText(">" .. cpv .. "%") end
+    ui:SliderEnable(self.curePctRow.slider, buf.useCure and true or false)
+
 end
 
 -- Open the shared window for this class.

@@ -43,7 +43,16 @@ function M:BuildBody(ui, parent)
     self.offensiveRow = L:Row{ key = "offensiveWeave", label = "Weave Smite/Holy Fire", spell = "Smite", onToggle = set("offensiveWeave") }
     self.lightwellRow = L:Row{ key = "useLightwell", label = "Place Lightwell", spell = "Lightwell", onToggle = set("useLightwell") }
 
+
+    L:Header("Dispel")
+    self.cureRow = L:Row{ key = "useCure", label = "Cure afflictions", spell = "Dispel Magic", onToggle = set("useCure") }
+    self.curePctRow = L:Row{ label = "Cure first above",
+        slider = { key = "curePct", min = 0, max = 100, step = 5, suffix = "%", onChange = set("curePct") } }
+
     L:Finish()
+
+    ui:Tip(self.cureRow.cb, "Cure afflictions", "Remove curses, poisons, diseases and magic from the group with whatever your class has for it - here: Disease (Abolish or Cure Disease) and Magic (Dispel Magic).", "Off by default. A dispel costs a global cooldown that would otherwise be a heal, and only what you can actually remove is ever considered.")
+    ui:Tip(self.curePctRow.slider, "Cure first above", "The crossover between curing and healing, read off the WORST-HURT member. Above it the affliction comes first; below it the heal does.", "At 90 the group is cleansed first and topped up from 90 to 100 afterwards - the right order when the affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield, 100 makes it always come first.")
 
     ui:Tip(self.healRow.cb, "Heal mode", "Heal the party/raid with responsive downranking, and weave damage between heals.", "Also /sbr heal on|off. Off runs the shadow/leveling damage rotation.")
     ui:Tip(self.innerFireRow.cb, "Inner Fire", "Keep Inner Fire active at all times for the armor and spell bonus.")
@@ -122,6 +131,13 @@ function M:RefreshBody(ui, buf)
     -- heal sliders matter in heal mode
     ui:SliderEnable(self.healAtRow.slider, buf.healMode)
     ui:SliderEnable(self.flashHealRow.slider, buf.healMode and buf.useFlashHeal)
+
+    ui:BindCheck(self.cureRow, buf.useCure, "Dispel Magic")
+    local cpv = buf.curePct or 90
+    self.curePctRow.slider:SetValue(cpv)
+    if self.curePctRow.slider.valText then self.curePctRow.slider.valText:SetText(">" .. cpv .. "%") end
+    ui:SliderEnable(self.curePctRow.slider, buf.useCure and true or false)
+
 end
 
 -- Open the shared window for this class.

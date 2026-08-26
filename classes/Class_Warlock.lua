@@ -135,7 +135,15 @@ local wlCastEventFrame = CreateFrame("Frame")
 wlCastEventFrame:RegisterEvent("UNIT_CASTEVENT")
 -- "Your Corruption was resisted by X." - see the resist branch at the bottom.
 wlCastEventFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
+-- Learned immunity is relearned every fight rather than remembered: a GUID
+-- belongs to one mob for one pull, and carrying the table around for a session
+-- would eventually answer for a different creature entirely.
+wlCastEventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 wlCastEventFrame:SetScript("OnEvent", function()
+    if event == "PLAYER_REGEN_ENABLED" then
+        M.dotImmune = {}
+        return
+    end
     if event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
         -- A resisted or missed DoT never landed, so both the confirmation stamp
         -- and any pending mark are wrong and are cleared: the next press applies
@@ -145,6 +153,25 @@ wlCastEventFrame:SetScript("OnEvent", function()
         -- retry into a loop, and the interval that suppresses it there is doing
         -- its job. Only genuinely wasted casts are unblocked here.
         if not arg1 then return end
+        -- "Your Immolate failed. X is immune." Definitive, and the only signal
+        -- there is. Recorded against the current target and only when the line
+        -- names it, so a message about something else cannot silence a DoT here.
+        if string.find(arg1, "immune") then
+            local tname = UnitName("target")
+            local _, guid = UnitExists("target")
+            if not (tname and guid and string.find(arg1, tname, 1, true)) then return end
+            local function mark(name)
+                if string.find(arg1, name, 1, true) then
+                    M.dotImmune[guid .. "|" .. name] = true
+                    M.dotThrottle[name] = nil
+                    M.dotPending[name] = nil
+                    return true
+                end
+            end
+            for name in pairs(M.dotTex) do if mark(name) then return end end
+            for i = 1, table.getn(M.CURSES) do if mark(M.CURSES[i]) then return end end
+            return
+        end
         if not (string.find(arg1, "resist") or string.find(arg1, "miss")) then return end
         for name in pairs(M.dotTex) do
             if string.find(arg1, name, 1, true) then
@@ -439,8 +466,11 @@ function M:ShadowTranceUp()
     return false
 end
 
+-- 100 means "nothing to heal here", which covers both no pet and a dead one -
+-- a dead pet still EXISTS as a unit and reads 0 health, so without the second
+-- test every pet-health gate in the module fires at a corpse.
 function M:PetHPPct()
-    if not UnitExists("pet") then return 100 end
+    if not UnitExists("pet") or UnitIsDead("pet") then return 100 end
     local mx = UnitHealthMax("pet")
     if mx and mx > 0 then return UnitHealth("pet") / mx * 100 end
     return 100
@@ -629,6 +659,22 @@ end
 -- end of this file) - not the instant it is sent.
 M.dotThrottle = {}
 
+-- Spells a given target turned out to be immune to, learned for the current
+-- combat and keyed by "<targetGUID>|<spell>". Cleared on leaving combat, like
+-- the hunter's sting immunity this mirrors.
+--
+-- 1.12 offers no way to ask whether a mob resists a school, so the only honest
+-- source is the client saying so: "Your Immolate failed. X is immune." Without
+-- it the rotation re-applied a DoT that cannot land every three seconds for the
+-- whole fight - reported as Immolate being spammed on fire-immune mobs.
+M.dotImmune = {}
+
+function M:DotImmune(spellName)
+    local _, guid = UnitExists("target")
+    if not guid then return false end
+    return self.dotImmune[guid .. "|" .. spellName] and true or false
+end
+
 -- Casts sent but not yet confirmed CAST or FAIL by UNIT_CASTEVENT, keyed by
 -- spell name -> { id = targetId at cast time, t = time sent }.
 M.dotPending = {}
@@ -657,6 +703,9 @@ end
 function M:ApplyDot(spellName, texFrag, interval)
     interval = interval or 3
     if self:TargetDebuffUp(spellName, texFrag) then return "up" end
+    -- Immune to this one: report it as handled so the DoT chain moves on to the
+    -- next spell instead of stopping here for the rest of the fight.
+    if self:DotImmune(spellName) then return "up" end
     local detectable = (texFrag ~= nil) or Aegis_SBR:CanResolveDebuffNames()
     local id = self:TargetId()
     local rec = self.dotThrottle[spellName]
@@ -703,7 +752,7 @@ function M:Rotate(cfg)
     -- Send the pet in. With petMeleeOnly, only when the target is within melee
     -- range (the same gate as the melee auto-attack), so an accidentally
     -- targeted far enemy never pulls the pet away.
-    if cfg.petAttack and UnitExists("pet") then
+    if cfg.petAttack and UnitExists("pet") and not UnitIsDead("pet") then
         if not cfg.petMeleeOnly or self:InMeleeRange() then PetAttack() end
     end
 
@@ -774,7 +823,8 @@ function M:Rotate(cfg)
 
     -- P2 Health Funnel: keep the pet alive when it drops, but only while you
     -- can spare the health (it transfers yours to the pet).
-    if cfg.healthFunnel and self:KnowsSpell("Health Funnel") and UnitExists("pet")
+    if cfg.healthFunnel and self:KnowsSpell("Health Funnel")
+        and UnitExists("pet") and not UnitIsDead("pet")
         and self:PetHPPct() < (cfg.healthFunnelPetHp or 50) and hp > (cfg.healthFunnelHpMin or 45) then
         self:Queue("Health Funnel", "pet is hurt")
         return
