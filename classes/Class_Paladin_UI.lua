@@ -77,6 +77,8 @@ function M:BuildBody(ui, parent)
         slider = { key = "panicPct", min = 0, max = 60, step = 5, suffix = "%", onChange = set("panicPct") } }
     self.lohDpsRow = L:Row{ label = "Lay on Hands below", spell = "Lay on Hands",
         slider = { key = "tankLohPct", min = 0, max = 50, step = 5, suffix = "%", onChange = set("tankLohPct") } }
+    self.panicHealRow = L:Row{ label = "Under the bubble, heal to",
+        slider = { key = "panicHealTo", min = 0, max = 100, step = 5, suffix = "%", onChange = set("panicHealTo") } }
 
     -- Solofarming keeps itself alive with the same heal engine the healer page
     -- uses, aimed at nobody but you - so the controls are the same ones, and
@@ -253,6 +255,7 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.curePctRow.slider, "Cure first above", "The crossover between curing and healing, read off the WORST-HURT member. Above it the affliction comes first; below it the heal does.", "At 90 the group is cleansed first and topped up from 90 to 100 afterwards - the right order when the affliction is doing more damage than the missing tenth of a bar. 0 makes curing always yield, 100 makes it always come first.")
 
     ui:Tip(self.panicDpsRow.slider, "Divine Shield below", "Below this share of your health, everything stops and Divine Shield goes up. 0 is off.", "Tried first, because five minutes is a far cheaper cooldown than an hour. Skipped while Forbearance is on you or one is already up, and Lay on Hands below then takes over. Note it drops your threat - which is a feature here and the reason the tank page does not offer it.")
+    ui:Tip(self.panicHealRow.slider, "Under the bubble, heal to", "While Divine Shield holds, heal yourself until you reach this much health, then carry on fighting. 0 is off.", "Ten seconds of immunity is the only completely safe casting time a paladin gets - no damage, so no pushback and no dying mid-cast. Reaching the goal ends it, and so does the bubble dropping; nothing is carried over into the moment you can be hit again. Lay on Hands is never used on top of a bubble at all - there is nothing to heal against while nothing can hurt you.")
     ui:Tip(self.lohDpsRow.slider, "Lay on Hands below", "Below this share of your health, Lay on Hands is cast on yourself. 0 is off.", "The deeper of the two: it heals you to full and costs no threat, but drains all your mana and runs on an hour's cooldown. Set it lower than the shield above, so it is only reached once the cheap answer is unavailable.")
     ui:Tip(self.lohRow.slider, "Lay on Hands below", "Below this share of your own health, Lay on Hands is cast on yourself before anything else. 0 is off.", "The tank's version of the healer's emergency bubble, and deliberately a different spell: a bubble drops every point of threat you have built, which hands the pull to somebody who cannot survive it. Lay on Hands costs no threat - it does cost all your mana, which is why it sits behind a threshold you set yourself.")
     ui:Tip(self.selfSoloRow.slider, "Heal yourself below", "Below this share of your health the rotation heals you instead of hitting things. 0 never heals.", "The same engine the healer page uses, aimed at nobody but you - so Holy Shock, Flash of Light and Holy Light are all chosen the same way, Holy Judgement's speed-up included.")
@@ -476,6 +479,13 @@ function M:RefreshBody(ui, buf)
         if pp == 1 then lbl = "spare only" elseif pp >= 2 then lbl = "like players" end
         self.petPrioRow.slider.valText:SetText(lbl)
     end
+
+    local phc = buf.panicHealTo or 0
+    self.panicHealRow.slider:SetValue(phc)
+    if self.panicHealRow.slider.valText then
+        self.panicHealRow.slider.valText:SetText(phc > 0 and (phc .. "%") or "off")
+    end
+    ui:SliderEnable(self.panicHealRow.slider, (buf.panicPct or 0) > 0)
 
     local ohv = buf.overhealCancel or 0
     self.ohRow.slider:SetValue(ohv)

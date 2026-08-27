@@ -401,6 +401,17 @@ function M:NormalizeProfile(c)
     -- the whole pull to somebody who cannot survive it - the emergency that
     -- saves you kills the group. Lay on Hands costs no threat.
     if c.tankLohPct == nil then c.tankLohPct = 0 end
+    -- Health to reach while a bubble is up. Ten seconds of immunity is the only
+    -- completely safe casting time a paladin ever gets: no damage, so no
+    -- pushback and no risk of dying mid-cast. 0 = off.
+    --
+    -- A health goal rather than a number of casts, which is what this started
+    -- as: three casts means something entirely different at rank 1 with +40
+    -- healing than at rank 9 with +900, while "get me to 80%" means the same
+    -- thing to everyone. The heal engine already sizes a rank to a deficit, so
+    -- the goal is simply handed to it as a threshold.
+    if c.panicHealTo == nil then c.panicHealTo = 0 end
+    c.panicHealCasts = nil   -- retired: replaced by the health goal above
     -- Dispelling. Off by default - it spends a global cooldown that would
     -- otherwise be a heal, and which afflictions are worth removing is a
     -- judgement call that belongs to the player, not to us.
@@ -2069,6 +2080,10 @@ end
 -- cast would fail and the press would be spent on nothing.
 function M:PanicShield(cfg)
     if (cfg.panicPct or 0) <= 0 then return false end
+    -- Out of combat a low health bar is not an emergency, it is lunch. Bubbling
+    -- there burns a five minute cooldown for nothing - reported exactly that
+    -- way: "I was out of combat and just bubbled myself for no reason".
+    if not UnitAffectingCombat("player") then return false end
     local mx = UnitHealthMax("player")
     if not mx or mx <= 0 then return false end
     if (UnitHealth("player") / mx) > (cfg.panicPct / 100) then return false end
@@ -2093,12 +2108,45 @@ end
 -- answer and behind a threshold you set yourself.
 function M:PanicLayOnHands(cfg)
     if (cfg.tankLohPct or 0) <= 0 then return false end
+    if not UnitAffectingCombat("player") then return false end
+    -- Never on top of a bubble. Both thresholds can be crossed at once, and the
+    -- shield fires first - so without this the next press spent an HOUR-long
+    -- cooldown healing somebody who cannot currently be damaged. While
+    -- invulnerable there is nothing to heal against; when it drops, this fires
+    -- on its own if the health is still low enough.
+    if self:SelfInvulnerable() then return false end
     if not self:KnowsSpell("Lay on Hands") then return false end
     local mx = UnitHealthMax("player")
     if not mx or mx <= 0 then return false end
     if (UnitHealth("player") / mx) > (cfg.tankLohPct / 100) then return false end
     if not self:OwnCDReady("Lay on Hands") then return false end
     return Aegis_SBR:CastOnUnit("Lay on Hands", "player", "emergency")
+end
+
+-- Heal yourself while the bubble holds.
+--
+-- Runs above everything except the emergencies themselves, and only while
+-- actually invulnerable - the count is a ceiling on how much of the window to
+-- spend, not a queue that keeps firing after it ends. Stops early at full
+-- health, because the point is the health and not the casts.
+--
+-- Uses the ordinary heal engine aimed at the player, like Solofarming does, so
+-- rank choice and Holy Judgement behave exactly as everywhere else.
+function M:PanicHeal(cfg)
+    local goal = cfg.panicHealTo or 0
+    if goal <= 0 then return false end
+    if not self:SelfInvulnerable() then return false end
+
+    local mx = UnitHealthMax("player")
+    if not mx or mx <= 0 then return false end
+    if (UnitHealth("player") / mx) >= (goal / 100) then return false end
+
+    -- The ordinary heal engine, aimed at the player and told to stop at the
+    -- goal. Nothing here counts casts or remembers anything between presses:
+    -- the health bar is the state, so there is nothing to get out of step.
+    local win = { spec = "solo", healThreshold = goal, healSelfPct = 0 }
+    for k, v in pairs(cfg) do if win[k] == nil then win[k] = v end end
+    return self:DoHeal(win)
 end
 
 function M:Rotate(cfg)
@@ -2116,6 +2164,7 @@ function M:Rotate(cfg)
     -- page offers Lay on Hands instead, for the reason recorded at tankLohPct.
     if self:PanicShield(cfg) then return end
     if self:PanicLayOnHands(cfg) then return end
+    if self:PanicHeal(cfg) then return end
 
     -- Heal-mode trace. It has to sit HERE, above the heal branches, because every
     -- one of them returns - the strike/seal trace further down is unreachable for
@@ -2233,6 +2282,9 @@ function M:Rotate(cfg)
     end
 
     if self:Tracing() then
+        -- select() does not exist on this client; take the second return plainly.
+        local _, traceZeal = self:BuffTime("Zeal")
+        traceZeal = traceZeal or 0
         local db = cfg.seals.debuff
         local strk = (self:StrikeEnabled(cfg) and self:SharedStrikeReady(cfg)) and "Y" or "N"
         self:Trace(
@@ -2262,6 +2314,7 @@ function M:Rotate(cfg)
                 .. " mana=" .. UnitMana("player")
                 .. " how=" .. (self:TargetHPPct() <= 20 and (self:IsReady("Hammer of Wrath") and "rdy" or "cd") or "-")
                 .. " sotc=" .. (self:TargetHasJudgementDebuff("Seal of the Crusader") and "up" or "-")
+                .. " zeal=" .. traceZeal
                 .. " hit=" .. (self:BeingAttacked() and "Y" or "N")
                 .. " setup=" .. string.format("%.1fs", self:CrusaderSetupTime(cfg))
                 .. " ttk=" .. (Aegis_SBR:TargetTTK() and string.format("%.1fs", Aegis_SBR:TargetTTK()) or "?")
@@ -2300,7 +2353,16 @@ function M:Rotate(cfg)
         and Aegis_SBR:SpellReaches("Hammer of Wrath", "target") then
         local melee = self:InMeleeRange()
         local crusaderUp = self:TargetHasJudgementDebuff("Seal of the Crusader")
-        if not melee or crusaderUp or not self:CrusaderDetourWorthIt(cfg) then
+        -- Zeal, stacked by Crusader Strike, shortens the hammer's cast. In melee
+        -- that is the difference between the cast landing and the mob dying
+        -- under it, so melee waits for three stacks as well as the judgement.
+        --
+        -- At range neither applies: there is nothing else to do at thirty yards,
+        -- nobody is pushing the cast back, and holding the hammer for a buff you
+        -- can only build in melee would mean not casting it at all.
+        local _, zeal = self:BuffTime("Zeal")
+        local meleeReady = crusaderUp and (zeal or 0) >= ZEAL_STACKS
+        if not melee or meleeReady or not self:CrusaderDetourWorthIt(cfg) then
             if self:Pick("Hammer of Wrath", "execute") then return end
         else
             -- Worth the detour: hand the seal work to HandleSeals with the
