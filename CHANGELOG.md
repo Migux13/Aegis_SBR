@@ -4,6 +4,87 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.1 — Emergencies that wait for an emergency
+
+All four from a play report, and three of them were the addon doing something rather than
+failing to.
+
+### 🐛 Fixed — the paladin bubbled itself out of combat
+
+The emergency read your health and nothing else, so a low bar between pulls burned a five
+minute cooldown for lunch. Both emergency spells now require you to actually be in combat.
+
+### 🐛 Fixed — Divine Shield and Lay on Hands, one after the other
+
+Both thresholds can be crossed at once. The shield fires first, and on the very next press it
+declined to fire again — being already invulnerable — which let *Lay on Hands* through: an hour
+of cooldown spent healing somebody who cannot currently be damaged.
+
+Lay on Hands is now blocked while a bubble holds. When it drops and the health is still low, it
+fires on its own.
+
+### ✨ Under the bubble, heal to
+
+Ten seconds of immunity is the only completely safe casting time a paladin ever gets: no damage,
+so no pushback and no dying mid-cast. The rotation used to spend it fighting on with the same
+health bar it went in with.
+
+Set a health goal and it heals you to it, then carries on. **A goal rather than a number of
+casts**, which is what it started as: three casts means something entirely different at rank 1
+with +40 healing than at rank 9 with +900, while "get me to 80%" means the same thing to
+everybody. It also removes the state — the health bar *is* the progress, so nothing has to be
+counted or reset when the bubble ends.
+
+### ✨ Hammer of Wrath waits for Zeal in melee
+
+*Zeal*, stacked by Crusader Strike, shortens the hammer's cast — which in melee is the
+difference between the cast landing and the mob dying under it. In melee it now waits for three
+stacks as well as *Judgement of the Crusader*.
+
+At range neither applies and it stays priority one: there is nothing else to do at thirty yards,
+nobody is pushing the cast back, and holding it for a buff you can only build in melee would
+mean not casting it at all.
+
+### 🐛 Fixed — the warlock stalled for two seconds
+
+`ApplyDot` answers *"wait"* while a cast it sent has not been confirmed, and the caller returns
+from the **whole** rotation on that answer — deliberately, because Nampower's queue holds one
+spell and anything else would evict it. But when the confirmation never arrived, that guess cost
+two full seconds of doing nothing while the button was being spammed.
+
+The end of a cast now comes from the client's own `SPELLCAST_STOP` / `FAILED` / `INTERRUPTED`
+instead of a timer. Same correction the paladin got in v1.2.0, for the same reason: measure the
+end of a cast, never guess it.
+
+### ⚡ Exorcism moved up the priority
+
+From a play report: a whole Sunken Temple run, plenty of eligible targets, two casts.
+
+*Exorcism* sat **last** in the damage chain — below the strike, *Holy Shield*, *Consecration*,
+the seals, *Hammer of Wrath* and *Repentance* — so it only ever got a press when all of those
+were on cooldown at the same moment. That is the wrong place for a rare, strong spell with a
+cooldown of its own: what it competes with is a strike that comes back in three seconds, and it
+loses that trade every time.
+
+It now sits directly behind *Hammer of Wrath*, whenever the target is Undead or Demon. On the
+Solofarming tab it stays behind the self-heal and *Holy Shield*, where staying alive outranks
+any nuke.
+
+Two things it is **not**, both of which can look identical from the outside:
+
+- **Mana recovery still suppresses it**, and that suppression is silent. The recovery flag
+  latches — on below *Mana low*, off only at *Mana high* — so on a wide band it can stay engaged
+  for an entire fight with mana sitting comfortably in between. *Consecration* has an opt-out for
+  exactly this; Exorcism has none.
+- **Creature type.** The check is *Undead* or *Demon* and nothing else, so a zone that reads as
+  undead by atmosphere rather than by type never qualifies.
+
+The `/sbr trace` line now answers both directly, naming the target's creature type and the exact
+reason a press was skipped — `exo=wrong type`, `exo=MANA MODE`, `exo=cd`, `exo=range`,
+`exo=ready` — instead of leaving "it is off cooldown and simply not firing" to guesswork.
+
+---
+
 ## v1.2.0 — Paladin healing rebuilt, dispelling, and DoTs that survive a resist
 
 ### 🙏 Thanks

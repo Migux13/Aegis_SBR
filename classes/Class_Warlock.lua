@@ -108,11 +108,27 @@ M.stConsumedAt = 0
 local wlChannelFrame = CreateFrame("Frame")
 wlChannelFrame:RegisterEvent("SPELLCAST_CHANNEL_START")
 wlChannelFrame:RegisterEvent("SPELLCAST_CHANNEL_STOP")
+-- The end of an ordinary cast, so a DoT waiting for confirmation is released on
+-- evidence instead of on a two second timer.
+--
+-- ApplyDot answers "wait" while a cast it sent has not been confirmed, and the
+-- caller returns from the WHOLE rotation on that answer - deliberately, because
+-- Nampower's queue holds one spell and anything else would evict it. But when
+-- the confirmation never arrives, that guess costs two full seconds of doing
+-- nothing, spamming the button. Reported as the rotation stalling for a few
+-- seconds; this is the only path in the module that can stall for that long.
+wlChannelFrame:RegisterEvent("SPELLCAST_STOP")
+wlChannelFrame:RegisterEvent("SPELLCAST_FAILED")
+wlChannelFrame:RegisterEvent("SPELLCAST_INTERRUPTED")
 wlChannelFrame:SetScript("OnEvent", function()
     if event == "SPELLCAST_CHANNEL_START" then
         M.channeling = true; M.chanStart = GetTime()
     elseif event == "SPELLCAST_CHANNEL_STOP" then
         M.channeling = false
+    else
+        -- A cast ended, one way or another. Nothing is left in the queue to
+        -- protect, so no DoT should still be waiting on one.
+        M.dotPending = {}
     end
 end)
 
