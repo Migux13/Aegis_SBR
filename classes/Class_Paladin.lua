@@ -2315,6 +2315,15 @@ function M:Rotate(cfg)
                 .. " how=" .. (self:TargetHPPct() <= 20 and (self:IsReady("Hammer of Wrath") and "rdy" or "cd") or "-")
                 .. " sotc=" .. (self:TargetHasJudgementDebuff("Seal of the Crusader") and "up" or "-")
                 .. " zeal=" .. traceZeal
+                .. " ctype=" .. (UnitCreatureType and (UnitCreatureType("target") or "?") or "?")
+                .. " exo=" .. (cfg.spells.exorcism and (
+                    (not self:KnowsSpell("Exorcism")) and "unknown"
+                    or (not self:TargetIsUndeadOrDemon()) and "wrong type"
+                    or self.manaMgmtActive and "MANA MODE"
+                    or (not self:IsReady("Exorcism")) and "cd"
+                    or (not Aegis_SBR:SpellReaches("Exorcism", "target")) and "range"
+                    or (not self:Affordable("Exorcism")) and "cost"
+                    or "ready") or "off")
                 .. " hit=" .. (self:BeingAttacked() and "Y" or "N")
                 .. " setup=" .. string.format("%.1fs", self:CrusaderSetupTime(cfg))
                 .. " ttk=" .. (Aegis_SBR:TargetTTK() and string.format("%.1fs", Aegis_SBR:TargetTTK()) or "?")
@@ -2394,6 +2403,26 @@ function M:Rotate(cfg)
         end
     end
 
+    -- 0b. Exorcism against an Undead or Demon target, directly behind the
+    -- hammer and ahead of everything else - but AFTER the solofarming block,
+    -- where staying alive outranks any nuke.
+    --
+    -- It sat LAST, below the strike, Holy Shield, Consecration, the seals and
+    -- two more - so it only ever got a press when all of those were on cooldown
+    -- at once. That is the wrong place for a rare, strong spell that carries its
+    -- own cooldown: what it competes with is a strike that will come back in
+    -- three seconds, and it loses that trade every time.
+    --
+    -- Still skipped during mana recovery. That suppression is silent and has no
+    -- opt-out of its own, unlike Consecration's - if Exorcism seems ready and
+    -- simply never fires, the trace line says "exo=MANA MODE" and that is why.
+    if not cfg.healMode and cfg.spells.exorcism and not self.manaMgmtActive
+        and self:KnowsSpell("Exorcism") and self:TargetIsUndeadOrDemon()
+        and self:IsReady("Exorcism") and Aegis_SBR:SpellReaches("Exorcism", "target")
+        and self:Affordable("Exorcism") then
+        if self:Pick("Exorcism", "undead or demon") then return end
+    end
+
     -- 1. Strike (damage/tank mode only; heal mode has its own strike weaving,
     -- HealStrikeEngine/HolyStrikeDue, above)
     --
@@ -2453,15 +2482,6 @@ function M:Rotate(cfg)
     if not cfg.healMode and cfg.spells.repentance and self:IsReady("Repentance")
         and Aegis_SBR:SpellReaches("Repentance", "target") then
         if self:Pick("Repentance", "control") then return end
-    end
-    -- 6. Exorcism, a strong nuke but only against Undead and Demon targets.
-    -- Skipped during mana recovery so it does not burn the mana we are saving.
-    -- (damage/tank mode only)
-    if not cfg.healMode and cfg.spells.exorcism and not self.manaMgmtActive
-        and self:KnowsSpell("Exorcism") and self:TargetIsUndeadOrDemon()
-        and self:IsReady("Exorcism") and Aegis_SBR:SpellReaches("Exorcism", "target")
-        and self:Affordable("Exorcism") then
-        if self:Pick("Exorcism", "undead or demon") then return end
     end
 end
 

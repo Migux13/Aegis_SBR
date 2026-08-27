@@ -56,6 +56,33 @@ The end of a cast now comes from the client's own `SPELLCAST_STOP` / `FAILED` / 
 instead of a timer. Same correction the paladin got in v1.2.0, for the same reason: measure the
 end of a cast, never guess it.
 
+### ⚡ Exorcism moved up the priority
+
+From a play report: a whole Sunken Temple run, plenty of eligible targets, two casts.
+
+*Exorcism* sat **last** in the damage chain — below the strike, *Holy Shield*, *Consecration*,
+the seals, *Hammer of Wrath* and *Repentance* — so it only ever got a press when all of those
+were on cooldown at the same moment. That is the wrong place for a rare, strong spell with a
+cooldown of its own: what it competes with is a strike that comes back in three seconds, and it
+loses that trade every time.
+
+It now sits directly behind *Hammer of Wrath*, whenever the target is Undead or Demon. On the
+Solofarming tab it stays behind the self-heal and *Holy Shield*, where staying alive outranks
+any nuke.
+
+Two things it is **not**, both of which can look identical from the outside:
+
+- **Mana recovery still suppresses it**, and that suppression is silent. The recovery flag
+  latches — on below *Mana low*, off only at *Mana high* — so on a wide band it can stay engaged
+  for an entire fight with mana sitting comfortably in between. *Consecration* has an opt-out for
+  exactly this; Exorcism has none.
+- **Creature type.** The check is *Undead* or *Demon* and nothing else, so a zone that reads as
+  undead by atmosphere rather than by type never qualifies.
+
+The `/sbr trace` line now answers both directly, naming the target's creature type and the exact
+reason a press was skipped — `exo=wrong type`, `exo=MANA MODE`, `exo=cd`, `exo=range`,
+`exo=ready` — instead of leaving "it is off cooldown and simply not firing" to guesswork.
+
 ---
 
 ## v1.2.0 — Paladin healing rebuilt, dispelling, and DoTs that survive a resist
