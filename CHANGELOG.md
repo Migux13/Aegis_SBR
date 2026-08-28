@@ -4,7 +4,7 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
-## v1.3.0 — Holy Strike before the heal, and three defects a log made visible
+## v1.2.3 — Holy Strike before the heal, and three defects a log made visible
 
 A conversation with a level 60 holy paladin, four play reports, and a captured session log
 that settled every one of them with a number.
