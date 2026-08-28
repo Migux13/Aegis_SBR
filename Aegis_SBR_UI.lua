@@ -888,6 +888,96 @@ function Aegis_SBR_Layout:Button(o)
     return btn
 end
 
+-- A label with N small buttons on the right, of which exactly one reads as
+-- chosen. The existing Button row is full width and holds one action; this is
+-- for a short 1-of-N pick where a dropdown would be heavier than the choice.
+-- Returns { btns = { ... } } with :SetActive(i) - pass nil for none.
+function Aegis_SBR_Layout:Choice(o)
+    self:_sep()
+    local hl = self:_hl(LAY.VROW_H)
+    local P = self.host or self.p
+    local host = CreateFrame("Frame", nil, P)
+    host:SetPoint("TOPLEFT", P, "TOPLEFT", 10, self.y - 4)
+    host:SetPoint("TOPRIGHT", P, "TOPRIGHT", -10, self.y - 4)
+    host:SetHeight(LAY.VROW_H - 6)
+    host:EnableMouse(true)   -- so the row can carry a tooltip
+    local lab = FS(host, "GameFontNormalSmall", o.label or "")
+    SetFontSafe(lab, false, 12)
+    lab:SetPoint("LEFT", host, "LEFT", 2, 0)
+    lab:SetTextColor(PAL.ink[1], PAL.ink[2], PAL.ink[3])
+    lab:SetJustifyH("LEFT")
+    self:_rec(host, true); self:_rec(lab, false)
+
+    local n = table.getn(o.options or {})
+    local W, GAP = 26, 4
+    local btns = {}
+    for i = 1, n do
+        local idx = i
+        local b = CreateFrame("Button", nil, host)
+        b:SetWidth(W); b:SetHeight(LAY.VROW_H - 12)
+        b:SetPoint("RIGHT", host, "RIGHT", -((n - i) * (W + GAP)) - 2, 0)
+        local t = FS(b, "GameFontNormalSmall", o.options[i])
+        SetFontSafe(t, false, 11)
+        t:SetPoint("CENTER", b, "CENTER", 0, 0)
+        SkinButton(b, "ghost")
+        b.aegisText = t
+        b:SetScript("OnClick", function() if o.onSelect then o.onSelect(idx) end end)
+        self:_rec(b, false)
+        btns[i] = b
+    end
+    wireHover(host, hl)
+    self.y = self.y - LAY.VROW_H
+    local box = { btns = btns, label = lab, host = host }
+    function box:SetActive(sel)
+        local acc = classColor()
+        for i = 1, table.getn(self.btns) do
+            local t = self.btns[i].aegisText
+            if not t then
+            elseif i == sel then t:SetTextColor(acc[1], acc[2], acc[3])
+            else t:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3]) end
+        end
+    end
+    return box
+end
+
+-- The talent slot row, shared by every class that has spec tabs. One line in a
+-- class body builds it; the shell refreshes it. It always shows the binding for
+-- the tab you are looking at, which is why it is not tagged to any one of them.
+function Aegis_SBR_UI:BuildGobboRow(L)
+    if not (MOD() and MOD().specTabs) then return end
+    L:Header("Talent slot")
+    self.gobboRow = L:Choice{
+        label = "This tab loads with slot",
+        options = { "1", "2", "3", "4" },
+        onSelect = function(i)
+            local tab = Aegis_SBR_UI:CurrentSpecKey()
+            local prof = Aegis_SBR_UI.editing
+            if not prof or not tab then return end
+            -- Clicking the slot it already has clears it, so the same four
+            -- buttons both set and unset without a fifth "off" button.
+            if CORE:GobboSlotOf(prof, tab) == i then
+                CORE:GobboClear(i)
+            else
+                local ok, why = CORE:GobboBind(i, prof, tab)
+                if not ok then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffff8866Aegis:|r cannot bind slot " .. i .. " - " .. (why or "?"))
+                end
+            end
+            Aegis_SBR_UI:Refresh()
+        end,
+    }
+    Tip(self.gobboRow.host, "Talent slot",
+        "Ties this tab to one slot of the Goblin Brainwashing Device. Switch to that build in game and the rotation switches to this tab on its own.",
+        "The slot number is read from the device's own dialogue as you activate it, so binding takes nothing but pressing the number here - you do not have to be wearing that spec. Press it again to unbind. Each switch also teaches the addon what that build looks like, so it is recognised again after a login, with no dialogue involved.")
+end
+
+function Aegis_SBR_UI:RefreshGobboRow()
+    if not self.gobboRow then return end
+    local tab = self:CurrentSpecKey()
+    local prof = self.editing
+    self.gobboRow:SetActive((prof and tab) and CORE:GobboSlotOf(prof, tab) or nil)
+end
+
 -- Close the last section and stack everything; returns the content height.
 function Aegis_SBR_Layout:Finish()
     self:_closeSection()
@@ -1484,6 +1574,7 @@ function Aegis_SBR_UI:Refresh()
     end
 
     if MOD() and MOD().RefreshBody then MOD():RefreshBody(self, self.buf) end
+    self:RefreshGobboRow()
     if self.bodyLayout then self.bodyLayout:Reflow() end
 
     -- Live-apply edits to the active profile, so the window doubles as an

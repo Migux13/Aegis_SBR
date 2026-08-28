@@ -250,6 +250,11 @@ function M:BuildBody(ui, parent)
     self.healManaJudgeRow = L:Row{ key = "healManaJudge", label = "Judge Wisdom (group mana)",   spell = "Seal of Wisdom", onToggle = set("healManaJudge") }
     self.healJudgeHLRow   = L:Row{ key = "healJudgeHL",   label = "Pre-load Holy Judgement",     spell = "Judgement", onToggle = set("healJudgeHL") }
 
+    -- Last section on every tab: which Goblin Brainwashing Device slot this
+    -- tab answers to. Untagged, so it shows on all of them and always reports
+    -- the tab you are looking at.
+    ui:BuildGobboRow(L)
+
     L:Finish()
 
     ui:Tip(self.cureRow.cb, "Cure afflictions", "Remove curses, poisons, diseases and magic from the group with whatever your class has for it - here: Poison, Disease and Magic (Cleanse), or Poison and Disease (Purify).", "Off by default. A dispel costs a global cooldown that would otherwise be a heal, and only what you can actually remove is ever considered.")

@@ -75,6 +75,11 @@ function M:BuildBody(ui, parent)
         end }
     end
 
+    -- Last section on every tab: which Goblin Brainwashing Device slot this
+    -- tab answers to. Untagged, so it shows on all of them and always reports
+    -- the tab you are looking at.
+    ui:BuildGobboRow(L)
+
     L:Finish()
 
     ui:Tip(self.cureRow.cb, "Remove curses from the group", "Casts Remove Lesser Curse on a cursed party or raid member, without changing your target.", "Off by default: it costs a global cooldown. Runs above the damage rotation, because a curse left on the group usually costs more than one missed cast.")
