@@ -200,7 +200,24 @@ building. **Full analysis + the in-game verification block: `docs/research-class
 
 ---
 
-## 3. SuperCleveRoidMacros  (jrc13245/SuperCleveRoidMacros)
+## 3. SuperCleveRoidMacros  (brues-code/SuperCleveRoidMacros)
+
+> **FORK NOTE (2026-08-07, user-confirmed):** the user runs **`brues-code/SuperCleveRoidMacros`**,
+> which is active — along with that author's Nampower / ClassicAPI / UnitXP_SP3 builds. The
+> `jrc13245` repo this section was originally written against is a public archive. The
+> conditional/behaviour detail below was verified against the ARCHIVED fork and is believed to
+> still hold, but re-check anything behavioural against the brues-code wiki before relying on
+> it. Confirmed there so far: `/startattack` and `/stopattack` exist as conditional-capable
+> slash commands (<https://github.com/brues-code/SuperCleveRoidMacros/wiki/Slash-Commands>);
+> the wiki does not say whether they toggle or are start-only.
+
+**Auto-attack interaction with Aegis (found from a play report, fixed v1.2.2):** SCRM drives
+the swing via `/startattack`, so someone running it often never puts **Attack** on an action
+bar — and `Aegis_SBR:EnsureAutoAttack` needs a slotted Attack to read swing state from
+(`IsCurrentAction`). With no slot it fell back to bare `AttackTarget()`, which is a **toggle**
+on 1.12 (no Lua `/startattack` equivalent until 2.0), so every macro press flipped auto-attack
+on and off. Now fired at most once per target. **Tell users to slot Attack** anywhere the
+stance/form bar does not overwrite — that restores the guarded, self-healing path.
 Enhanced macro engine for 1.12.1 (Vanilla/Turtle): conditional execution, dynamic
 tooltips/icons, extended `/cast` syntax, count-based AoE conditionals, soft-target scanning.
 Based on CleverMacro + Roid-Macros. **NOTE: the repo is now a public archive** (development
@@ -242,7 +259,7 @@ ceased) — behavior is stable but won't get new features; verify installed beha
 pfUI libdebuff or Cursive is present with data — don't assume enemy-debuff timers are
 available for gating without one of those.
 
-**Docs:** https://github.com/jrc13245/SuperCleveRoidMacros/wiki (Conditionals, Slash-
+**Docs:** https://github.com/brues-code/SuperCleveRoidMacros/wiki (Conditionals, Slash-
 Commands, Reference-Tables pages).
 
 ---
