@@ -4,6 +4,47 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.4 — The talent slot picks the tab
+
+### ✨ New — bind a spec tab to a Goblin Brainwashing Device slot
+
+Every spec tab now ends with a **Talent slot** row: four numbered buttons, one of which can be
+lit. Press `2` on the Healer tab and switching to your device's second specialization switches
+the rotation to that tab, on its own. Press it again to unbind. Six classes have spec tabs and
+all six get the row.
+
+What is stored is the **profile and the tab together**, so it works whichever way you organise
+yourself: a separate `heal` profile comes back as that profile, and one profile with four tabs
+comes back on the right tab.
+
+**How the slot is recognised.** The device fires no event and there is no API that names the
+active slot. It does not need one — the device is an ordinary gossip NPC, and the option you
+click reads *"Activate 2nd Specialization"*. The number is in the text. So the gossip click is
+hooked and the number read from it, which is exactly what ItemRack does; the hook is **chained
+rather than replaced**, since ItemRack hooks the same global and both have to keep working.
+
+Two details taken from that implementation because both are load-bearing:
+
+- **"Save …" is ignored.** That option writes your *current* build into a slot and changes
+  nothing about what you are wearing. Acting on it would switch the rotation to a spec you never
+  entered.
+- **Renamed specs fall back to names.** Rename a spec and the number disappears from the text;
+  the spec-naming addon's table is then matched by position instead.
+
+**A second source, which the reference implementation does not have.** Every confirmed switch
+teaches the addon what that slot's talents look like, so a change with **no gossip click** — a
+login, most obviously — is recognised from the build alone. The fingerprint is exact per talent
+rank rather than a per-tree total, because two different builds can share 31/0/20.
+
+Both sources only ever act on a match. An unrecognised build changes nothing: spending a single
+talent point fires the same event, and a guess would swap your rotation mid-fight. `/sbr gobbo`
+lists the bindings and reports whether the hook is installed and how many builds are known.
+
+Binding costs nothing but pressing the number — you do not have to be wearing that spec, because
+the number is the binding and the build behind it is learned later.
+
+---
+
 ## v1.2.3 — Holy Strike before the heal, and three defects a log made visible
 
 A conversation with a level 60 holy paladin, four play reports, and a captured session log

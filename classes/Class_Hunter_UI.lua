@@ -71,6 +71,11 @@ function M:BuildBody(ui, parent)
     self.cdRow = L:Row{ key = "popCDs", label = "Pop cooldowns", onToggle = set("popCDs") }
     self.cdEliteRow = L:Row{ key = "autoCDElite", label = "Auto on elite", onToggle = set("autoCDElite") }
 
+    -- Last section on every tab: which Goblin Brainwashing Device slot this
+    -- tab answers to. Untagged, so it shows on all of them and always reports
+    -- the tab you are looking at.
+    ui:BuildGobboRow(L)
+
     L:Finish()
 
     ui:Tip(self.tauntRow.cb, "Smart Pet Taunt", "When the mob peels off your pet onto you, sends the pet's Growl to grab it back (throttled). Off by default; leave it off for melee-weave builds where you want aggro.")

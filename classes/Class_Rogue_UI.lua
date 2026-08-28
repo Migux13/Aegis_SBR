@@ -174,6 +174,11 @@ function M:BuildBody(ui, parent)
         end }
     end
 
+    -- Last section on every tab: which Goblin Brainwashing Device slot this
+    -- tab answers to. Untagged, so it shows on all of them and always reports
+    -- the tab you are looking at.
+    ui:BuildGobboRow(L)
+
     L:Finish()
 
     ui:Tip(self.builderDD, "Builder", "The combo point builder you spam. Auto picks Noxious Assault if known, else Sinister Strike.")

@@ -107,6 +107,11 @@ function M:BuildBody(ui, parent)
         end }
     end
 
+    -- Last section on every tab: which Goblin Brainwashing Device slot this
+    -- tab answers to. Untagged, so it shows on all of them and always reports
+    -- the tab you are looking at.
+    ui:BuildGobboRow(L)
+
     L:Finish()
 
     ui:Tip(self.prioRow.cb, "Use priority list", "On a near tie, heal the listed players first: position 1 before position 2, both before anyone unlisted.", "A handicap, not a strict order - position 2 counts as 20%% healthier than it is, unlisted players as 35%%. Somebody in real trouble always outranks a scratched tank, because eligibility reads real health and only the ORDER is adjusted.")

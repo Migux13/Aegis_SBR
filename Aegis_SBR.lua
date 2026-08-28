@@ -17,7 +17,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.2.3",
+    ver = "1.2.4",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -796,6 +796,227 @@ function Aegis_SBR:GroupUnitList()
         for i = 1, np do table.insert(units, "party" .. i) end
     end
     return units
+end
+
+-- ============================================================
+-- Talent slot binding (Goblin Brainwashing Device)
+--
+-- Turtle's device stores four talent builds and swaps between them, and fires no
+-- event to say which one is now live. It does not have to: the device is an
+-- ordinary gossip NPC, and the option you click reads "Activate 2nd
+-- Specialization". The number is in the text.
+--
+-- So the slot is read where it is actually stated - by hooking the gossip click,
+-- the same way ItemRack does it. Exact, immediate, and untroubled by two specs
+-- happening to have identical talents.
+--
+-- A second, weaker source backs it up. Every confirmed switch teaches us what
+-- that slot's talents look like, so a later change with no gossip click - a
+-- login, most obviously - is still recognised by the build alone. The
+-- fingerprint is exact per talent rank rather than a per-tree total, because two
+-- different builds can share 31/0/20.
+--
+-- Both sources only ever ACT on a match. An unrecognised build changes nothing:
+-- spending a single talent point fires the same event, and a guess would swap
+-- your rotation mid-fight.
+-- ============================================================
+local GOBBO_SLOTS = 4
+
+-- Every talent's rank, in a fixed order. Exact rather than a per-tree total,
+-- because two different builds can share 31/0/20 and must not be confused.
+-- Returns nil while the talent tables are not loaded yet (early login), which
+-- callers must treat as "do not know", never as "no talents".
+function Aegis_SBR:TalentFingerprint()
+    if not GetNumTalentTabs or not GetNumTalents or not GetTalentInfo then return nil end
+    local tabs = GetNumTalentTabs() or 0
+    if tabs == 0 then return nil end
+    local out, spent = {}, 0
+    for t = 1, tabs do
+        local n = GetNumTalents(t) or 0
+        for i = 1, n do
+            local _, _, _, _, rank = GetTalentInfo(t, i)
+            rank = rank or 0
+            spent = spent + rank
+            table.insert(out, rank)
+        end
+    end
+    -- No points spent at all is not a build, it is a fresh character or a
+    -- half-loaded talent frame. Never photograph it.
+    if spent == 0 then return nil end
+    return table.concat(out, ",")
+end
+
+function Aegis_SBR:GobboStore()
+    if not AegisDB then return nil end
+    if type(AegisDB.gobbo) ~= "table" then AegisDB.gobbo = {} end
+    return AegisDB.gobbo
+end
+
+-- Bind one slot to the profile and tab given, photographing the talents now.
+-- A slot holds one binding and a tab belongs to one slot, so both are cleared
+-- first - otherwise two tabs could answer to the same build.
+function Aegis_SBR:GobboBind(slot, profile, tab)
+    local st = self:GobboStore()
+    if not st or not slot or slot < 1 or slot > GOBBO_SLOTS then return false, "bad slot" end
+    for i = 1, GOBBO_SLOTS do
+        local b = st[i]
+        if b and b.profile == profile and b.tab == tab then st[i] = nil end
+    end
+    st[slot] = { profile = profile, tab = tab }
+    return true
+end
+
+-- What each slot's talents looked like the last time we saw it activated.
+-- Learned, never entered: the player binds a NUMBER, and the build behind that
+-- number is whatever the device produced.
+function Aegis_SBR:GobboFpStore()
+    if not AegisDB then return nil end
+    if type(AegisDB.gobboFp) ~= "table" then AegisDB.gobboFp = {} end
+    return AegisDB.gobboFp
+end
+
+function Aegis_SBR:GobboClear(slot)
+    local st = self:GobboStore()
+    if st and slot then st[slot] = nil end
+end
+
+-- Which slot this profile and tab are bound to, or nil.
+function Aegis_SBR:GobboSlotOf(profile, tab)
+    local st = self:GobboStore()
+    if not st then return nil end
+    for i = 1, GOBBO_SLOTS do
+        local b = st[i]
+        if b and b.profile == profile and b.tab == tab then return i end
+    end
+    return nil
+end
+
+-- Switch to whatever slot N is bound to. Returns true if anything moved.
+function Aegis_SBR:GobboActivate(slot, why)
+    local st = self:GobboStore()
+    local b = st and st[slot]
+    if not b or not AegisDB or not AegisDB.profiles then return false end
+    if not AegisDB.profiles[b.profile] then
+        msgOut("talent slot " .. slot .. " points at profile '" .. b.profile
+            .. "', which no longer exists.", 1, 0.5, 0.3)
+        return false
+    end
+    local changed = false
+    if AegisDB.active ~= b.profile then
+        AegisDB.active = b.profile
+        changed = true
+    end
+    -- The tab is a field on the profile, written exactly the way the tab rail
+    -- writes it, so the rotation's own branching is untouched.
+    local sp = self.active and self.active.specTabs
+    if sp and b.tab then
+        local val = b.tab
+        if sp.encode then val = sp.encode(b.tab) end
+        local cfg = AegisDB.profiles[b.profile]
+        if cfg and cfg[sp.field] ~= val then cfg[sp.field] = val; changed = true end
+    end
+    if changed then
+        msgOut("talent slot " .. slot .. " (" .. (why or "?") .. "): '" .. b.profile
+            .. "'" .. (b.tab and (" / " .. b.tab) or "") .. ".")
+        if Aegis_SBR_UI and Aegis_SBR_UI.built and Aegis_SBR_UI.Refresh then
+            Aegis_SBR_UI:Refresh()
+        end
+    end
+    return changed
+end
+
+-- The device told us which slot, in its own gossip text. Act on it now, and arm
+-- the fingerprint so the talent change that follows teaches us this build.
+function Aegis_SBR:GobboOnGossip(slot)
+    if not slot or slot < 1 or slot > GOBBO_SLOTS then return end
+    self.gobboLearn = slot
+    self:GobboActivate(slot, "device")
+end
+
+-- Talents changed: learn the armed slot's build, or recognise a known one.
+-- Silent when nothing matches, which is the common case.
+function Aegis_SBR:GobboApply()
+    local st = self:GobboStore()
+    if not st or not AegisDB or not AegisDB.profiles then return end
+    local fp = self:TalentFingerprint()
+    if not fp then return end
+    local fps = self:GobboFpStore()
+    if not fps then return end
+
+    -- A gossip click just told us the slot, so whatever the talents are now IS
+    -- that slot's build. Learned rather than asked for, which is why binding a
+    -- number never requires you to be wearing that spec.
+    if self.gobboLearn then
+        fps[self.gobboLearn] = fp
+        self.gobboLearn = nil
+        self.gobboLastFp = fp
+        return
+    end
+
+    if fp == self.gobboLastFp then return end
+    self.gobboLastFp = fp
+    for i = 1, GOBBO_SLOTS do
+        if fps[i] == fp then return self:GobboActivate(i, "talents") end
+    end
+end
+
+-- Hook the device's gossip options and read the slot out of the text, which is
+-- where it is plainly stated. Chained, not replaced: ItemRack hooks the same
+-- global for the same reason, and both have to keep working.
+--
+-- Only "Activate ..." counts. A "Save ..." click stores your CURRENT build into
+-- that slot and changes nothing about what you are wearing, so acting on it
+-- would switch the rotation to a spec you never entered.
+local GBD_NAME = "Goblin Brainwashing Device"
+function Aegis_SBR:HookGossip()
+    if self.gossipHooked then return end
+    if not GossipTitleButton_OnClick then return end
+    self.gossipHooked = true
+    local prev = GossipTitleButton_OnClick
+    GossipTitleButton_OnClick = function(button)
+        if this and this.type ~= "Available" and this.type ~= "Active"
+            and GossipFrameNpcNameText and GossipFrameNpcNameText:GetText() == GBD_NAME then
+            local text = this:GetText() or ""
+            if not string.find(text, "^Save") then
+                local _, _, num = string.find(text, "Activate (%d)")
+                local slot = tonumber(num)
+                -- A renamed spec loses the number, so fall back to the names the
+                -- spec-naming addon keeps, matched by position.
+                if not slot and GNS_SpecNames then
+                    local mine = GNS_SpecNames[UnitName("player") or ""]
+                    if mine then
+                        local _, _, nm = string.find(text, "^Activate%s*(.+) %([%d/]+%)$")
+                        if nm then
+                            for i = 1, GOBBO_SLOTS do
+                                if mine[i] == nm then slot = i; break end
+                            end
+                        end
+                    end
+                end
+                if slot then Aegis_SBR:GobboOnGossip(slot) end
+            end
+        end
+        if prev then return prev(button) end
+    end
+end
+
+function Aegis_SBR:CmdGobbo()
+    local st = self:GobboStore()
+    msgOut("talent slots:")
+    local any = false
+    for i = 1, GOBBO_SLOTS do
+        local b = st and st[i]
+        if b then
+            any = true
+            msgOut("  " .. i .. " -> '" .. b.profile .. "'" .. (b.tab and (" / " .. b.tab) or ""))
+        end
+    end
+    if not any then msgOut("  (none bound - pick a slot on any spec tab)") end
+    local fps = self:GobboFpStore()
+    local learned = 0
+    for i = 1, GOBBO_SLOTS do if fps and fps[i] then learned = learned + 1 end end
+    msgOut("  device hook " .. (self.gossipHooked and "installed" or "NOT installed")
+        .. ", " .. learned .. " of " .. GOBBO_SLOTS .. " builds learned.")
 end
 
 -- Every pet belonging to the given player units, appended in the same order.
@@ -1822,6 +2043,7 @@ function Aegis_SBR:EvalCommand(msg)
     end
     if cmd == "debug" then self:Debug(); return end
     if cmd == "talents" then self:Talents(); return end
+    if cmd == "gobbo" then self:CmdGobbo(); return end
     if cmd == "trace" then
         self.trace = not self.trace
         msgOut("trace " .. (self.trace and "on (per-press log)" or "off"))
@@ -1990,9 +2212,13 @@ ev:SetScript("OnEvent", function()
         Aegis_SBR:OnAddonLoaded()
     elseif event == "PLAYER_LOGIN" then
         Aegis_SBR:Banner()
+        Aegis_SBR:HookGossip()
     elseif event == "CHARACTER_POINTS_CHANGED" then
         Aegis_SBR.costCache = nil
         Aegis_SBR.radiusCache = nil
+        -- A talent change is also how the Goblin Brainwashing Device announces
+        -- itself, since it announces itself no other way.
+        Aegis_SBR:GobboApply()
     elseif event == "SPELLS_CHANGED" then
         -- learning a spell or rank invalidates the spellbook index and any
         -- cached profile validity, both rebuilt lazily on the next use
