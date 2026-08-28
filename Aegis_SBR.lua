@@ -17,7 +17,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.2.2",
+    ver = "1.3.0",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -798,6 +798,94 @@ function Aegis_SBR:GroupUnitList()
     return units
 end
 
+-- Every pet belonging to the given player units, appended in the same order.
+--
+-- Dispelling only. Pets carry poisons, diseases and curses like anybody else and
+-- a hunter's pet dying to a poison is a third of that hunter's damage gone -
+-- they were simply never in the list, because the roster helpers are shared with
+-- the healing engines and healing a pet is its own opt-in decision.
+--
+-- Appended rather than interleaved on purpose: within one affliction type the
+-- order decides who is cured first, and a player outranks a pet there.
+function Aegis_SBR:AppendPets(units)
+    if not units then return units end
+    local out = {}
+    local n = table.getn(units)
+    for i = 1, n do out[i] = units[i] end
+    for i = 1, n do
+        local u = units[i]
+        local pet
+        if u == "player" then pet = "pet"
+        else
+            local _, _, k = string.find(u, "^party(%d+)$")
+            if k then pet = "partypet" .. k end
+            if not pet then
+                local _, _, r = string.find(u, "^raid(%d+)$")
+                if r then pet = "raidpet" .. r end
+            end
+        end
+        if pet and UnitExists(pet) then table.insert(out, pet) end
+    end
+    return out
+end
+
+-- Units the client has just refused a cast on, by name, with the time it said
+-- so. Line of sight and range are the two answers no API can give in advance:
+-- IsSpellInRange measures distance and knows nothing about the hill in between,
+-- and it answers -1 "cannot judge" often enough that a heal target can be picked
+-- who was never castable.
+--
+-- Without this the refusal changed nothing: the same unit was still the worst
+-- hurt on the next press, so it was picked again, refused again, forever - the
+-- reported "if I don't have line of sight, the rotation just keeps spamming".
+-- Reported from Alterac Valley, where a raid is spread across a whole zone and
+-- both conditions are the normal case rather than the exception.
+--
+-- Held for a few seconds only. Both conditions are about where two people happen
+-- to be standing, and that changes constantly.
+local BLOCK_WINDOW = 5
+-- How long after our cast an error may still be blamed on it. The error arrives
+-- on the same frame in practice; the allowance is for a laggy one, and it is
+-- short so a later refusal about something else cannot land on this unit.
+local BLAME_WINDOW = 1.5
+Aegis_SBR.castBlocked = {}
+
+-- Remember who we just aimed a unit-targeted cast at, so an error message that
+-- names no unit can be attributed. Called by every class's CastOn.
+function Aegis_SBR:NoteUnitCast(unit)
+    self.lastUnitCast = unit and UnitName(unit) or nil
+    self.lastUnitCastAt = GetTime()
+end
+
+-- True while the client has recently refused to cast on this unit.
+function Aegis_SBR:CastBlocked(unit)
+    if not unit then return false end
+    local t = self.castBlocked[UnitName(unit) or ""]
+    return (t and (GetTime() - t) < BLOCK_WINDOW) and true or false
+end
+
+-- Compared against the client's own strings, so it holds in any locale. The
+-- literals are only a fallback for a client that does not define them.
+local CAST_REFUSED = {
+    SPELL_FAILED_LINE_OF_SIGHT or "Target not in line of sight",
+    SPELL_FAILED_OUT_OF_RANGE or "Out of range",
+    SPELL_FAILED_TOO_CLOSE or "Target too close",
+}
+
+function Aegis_SBR:OnCastError(msg)
+    if not msg or not self.lastUnitCast then return end
+    if (GetTime() - (self.lastUnitCastAt or 0)) > BLAME_WINDOW then return end
+    for i = 1, table.getn(CAST_REFUSED) do
+        if msg == CAST_REFUSED[i] then
+            self.castBlocked[self.lastUnitCast] = GetTime()
+            -- Spent: one refusal marks one unit, so the next error cannot be
+            -- blamed on the same cast.
+            self.lastUnitCast = nil
+            return
+        end
+    end
+end
+
 -- Cast at a unit without changing your target (SuperWoW's unit argument), and
 -- report rather than cast while a preview is running.
 function Aegis_SBR:CastOnUnit(spell, unit, reason)
@@ -808,6 +896,7 @@ function Aegis_SBR:CastOnUnit(spell, unit, reason)
         return true
     end
     Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    Aegis_SBR:NoteUnitCast(unit)
     CastSpellByName(spell, unit)
     return true
 end
@@ -925,127 +1014,6 @@ function Aegis_SBR:PickCure(units, cures, reach, blacklist)
                 -- its damage dealer back.
                 local charmSafe = (want ~= "Magic") or not e.charmed
                 if e.types[want] and charmSafe then return e.unit, spell, want end
-            end
-        end
-    end
-    return nil, nil, nil
-end
-
--- The party or raid as unit tokens, for a class that has no roster helper of
--- its own.
-function Aegis_SBR:GroupUnitList()
-    local units = {}
-    local nr = (GetNumRaidMembers and GetNumRaidMembers()) or 0
-    if nr > 0 then
-        for i = 1, nr do table.insert(units, "raid" .. i) end
-    else
-        table.insert(units, "player")
-        local np = (GetNumPartyMembers and GetNumPartyMembers()) or 0
-        for i = 1, np do table.insert(units, "party" .. i) end
-    end
-    return units
-end
-
--- Cast at a unit without changing your target (SuperWoW's unit argument), and
--- report rather than cast while a preview is running.
-function Aegis_SBR:CastOnUnit(spell, unit, reason)
-    if Aegis_SBR.deciding then
-        local p = Aegis_SBR.decidePlan
-        p.spell = spell
-        p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
-        return true
-    end
-    Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
-    CastSpellByName(spell, unit)
-    return true
-end
-
--- ============================================================
--- Dispelling
--- ============================================================
--- What a unit is afflicted with, as a set of dispel types: Magic, Curse,
--- Poison, Disease.
---
--- The type is the THIRD return of UnitDebuff and has been there all along - the
--- target-debuff snapshot reads past it looking for the SuperWoW spell id. No
--- tooltip scanning and no icon list is needed for this, which is the one part of
--- dispelling 1.12 makes easy.
---
--- An empty string is a real answer here and means "not dispellable by type",
--- so it is skipped rather than stored.
-function Aegis_SBR:DispelTypes(unit)
-    local out = nil
-    if not UnitExists(unit) then return nil end
-    for i = 1, 40 do
-        local tex, _, dtype = UnitDebuff(unit, i)
-        if not tex then break end
-        if dtype and dtype ~= "" then
-            out = out or {}
-            out[dtype] = true
-        end
-    end
-    return out
-end
-
--- How long a unit is left alone after a cure that did not take. Without it a
--- cure that cannot work - the debuff outlasted the cast, the spell was resisted,
--- the client refused it - is retried on every single press.
-local CURE_RETRY = 5
-
--- Which affliction to remove first. Magic before Curse before Poison before
--- Disease, which is the established default order for this.
---
--- Ordered on purpose, and this drives the whole search: the first version
--- walked each spell's covered types with `pairs`, which has no defined order in
--- Lua. A paladin holding Cleanse - three types in one spell - therefore removed
--- whichever type the table happened to enumerate first, not the one that
--- mattered. Roughly: magic tends to be the crowd control and the damage
--- amplifier, disease the slow tick you can outheal.
-local DISPEL_ORDER = { "Magic", "Curse", "Poison", "Disease" }
-
--- Pick somebody to cure and the spell to do it with.
---
--- Type first, then unit: a Magic effect anywhere in the group outranks a Poison
--- anywhere, which is how the ordering above is meant to work. Within one type
--- the group is walked in roster order.
---
--- `cures` is the class's list, each { spell = ..., types = { Poison = true } };
--- for a given affliction the first entry that covers it AND is trained wins, so
--- a class lists its better spell first (Abolish before Cure, Cleanse before
--- Purify). `units` is the class's own group list, `reach` an optional "can I
--- reach this unit" test.
---
--- Returns unit, spell, type. Nothing is cast here.
-function Aegis_SBR:PickCure(units, cures, reach, blacklist)
-    for oi = 1, table.getn(DISPEL_ORDER) do
-        local want = DISPEL_ORDER[oi]
-
-        -- The best spell we own for this affliction, or none.
-        local spell
-        for c = 1, table.getn(cures) do
-            local e = cures[c]
-            if e.types[want] and self:KnowsSpell(e.spell) then spell = e.spell; break end
-        end
-
-        if spell then
-            for i = 1, table.getn(units) do
-                local u = units[i]
-                if UnitExists(u) and UnitIsConnected(u) and not UnitIsDeadOrGhost(u)
-                    and UnitIsFriend("player", u)
-                    and (not reach or reach(u)) then
-                    local nm = UnitName(u)
-                    local bl = blacklist and nm and blacklist[nm]
-                    if not (bl and (GetTime() - bl) < CURE_RETRY) then
-                        -- Never strip Magic off a charmed ally: the charm itself
-                        -- IS the magic, and removing it is the one dispel that
-                        -- hands the mob its damage dealer back.
-                        local charmSafe = (want ~= "Magic") or not UnitIsCharmed(u)
-                        if charmSafe then
-                            local types = self:DispelTypes(u)
-                            if types and types[want] then return u, spell, want end
-                        end
-                    end
-                end
             end
         end
     end
@@ -2001,6 +1969,8 @@ ev:RegisterEvent("CHARACTER_POINTS_CHANGED")
 ev:RegisterEvent("CHAT_MSG_COMBAT_SELF_HITS")
 ev:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- The client's own refusal messages: the only source for line of sight.
+ev:RegisterEvent("UI_ERROR_MESSAGE")
 -- SuperWoW fires UNIT_CASTEVENT on every registered cast: arg1 caster GUID,
 -- arg2 target GUID, arg3 event type ("START"/"CAST"/"FAIL"/...), arg4 spell id,
 -- arg5 cast duration. Modules that care (e.g. Shaman totem tracking) get the
@@ -2030,6 +2000,8 @@ ev:SetScript("OnEvent", function()
         Aegis_SBR.validCacheName = nil
     elseif event == "CHAT_MSG_COMBAT_SELF_HITS" or event == "CHAT_MSG_COMBAT_SELF_MISSES" then
         if Aegis_SBR.active then Aegis_SBR.active:OnSwingMessage(arg1) end
+    elseif event == "UI_ERROR_MESSAGE" then
+        Aegis_SBR:OnCastError(arg1)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if Aegis_SBR.active then Aegis_SBR.active.lastSwing = nil end
         -- Out of combat the kill curve is meaningless, and keeping it would let

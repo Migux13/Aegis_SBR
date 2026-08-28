@@ -387,6 +387,11 @@ end
 -- only if none of the probed heals are learned yet (very early leveling).
 function M:Reachable(u)
     if UnitIsUnit(u, "player") then return true end
+    -- Recently refused by the client (no line of sight, or out of range after
+    -- IsSpellInRange could not judge). Never for yourself: you are always in
+    -- your own line of sight, and a stale mark would drop you from your own
+    -- heal list.
+    if Aegis_SBR:CastBlocked(u) then return false end
     if self:KnowsSpell("Heal") then return Aegis_SBR:SpellReaches("Heal", u)
     elseif self:KnowsSpell("Flash Heal") then return Aegis_SBR:SpellReaches("Flash Heal", u)
     elseif self:KnowsSpell("Renew") then return Aegis_SBR:SpellReaches("Renew", u) end
@@ -415,7 +420,7 @@ function M:CureStep(cfg, worst)
     if not self:GcdReady() then return false end
     if worst and worst < ((cfg.curePct or 90) / 100) then return false end
     -- Ordered by the same priority list the healing uses.
-    local units = Aegis_SBR:PrioOrderUnits(cfg, self:GroupUnits())
+    local units = Aegis_SBR:AppendPets(Aegis_SBR:PrioOrderUnits(cfg, self:GroupUnits()))
     local unit, spell = Aegis_SBR:PickCure(units, self.CURES,
         function(u) return self:Reachable(u) end, self.cureFail)
     if not unit or not spell then return false end
@@ -507,6 +512,7 @@ function M:CastOn(spell, unit, reason)
         p.reason = reason or ("on " .. (UnitName(unit) or unit or "?"))
         return
     end
+    Aegis_SBR:NoteUnitCast(unit)
     CastSpellByName(spell, unit)
 end
 
