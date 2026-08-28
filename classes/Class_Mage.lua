@@ -273,9 +273,12 @@ function M:CureStep(cfg)
     if not cfg.useCure then return false end
     if not self:KnowsSpell("Remove Lesser Curse") then return false end
     if not self:IsReady("Remove Lesser Curse") then return false end
-    local units = Aegis_SBR:PrioOrderUnits(cfg, Aegis_SBR:GroupUnitList())
+    local units = Aegis_SBR:AppendPets(Aegis_SBR:PrioOrderUnits(cfg, Aegis_SBR:GroupUnitList()))
     local unit, spell = Aegis_SBR:PickCure(units, self.CURES,
-        function(u) return Aegis_SBR:SpellReaches("Remove Lesser Curse", u) end,
+        function(u)
+            if Aegis_SBR:CastBlocked(u) then return false end
+            return Aegis_SBR:SpellReaches("Remove Lesser Curse", u)
+        end,
         self.cureFail)
     if not unit or not spell then return false end
     self:Later(function() self.cureFail[UnitName(unit) or "?"] = GetTime() end)

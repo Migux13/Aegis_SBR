@@ -435,6 +435,18 @@ function M:NormalizeProfile(c)
     if c.overhealCancelDelay == nil then c.overhealCancelDelay = 0 end
     if c.useHolyShock == nil then c.useHolyShock = true end
     if c.holyShockPct == nil then c.holyShockPct = 50 end
+    -- Holy Strike ahead of the healing itself, on cooldown, whenever you are in
+    -- melee range. Off by default because it IS a trade: a strike takes the
+    -- global cooldown a direct heal wanted, so somebody occasionally waits a
+    -- beat longer.
+    --
+    -- Asked for by a level 60 holy paladin, whose whole rotation is built on it:
+    -- Holy Strike, then Holy Light or two Flashes of Light while it comes back.
+    -- It splash-heals the group AND returns mana through Seal of Wisdom, which
+    -- is why a paladin who only casts the two direct heals cannot keep up. The
+    -- range requirement is the control: step out of melee and the rotation is
+    -- an ordinary healing rotation again.
+    if c.hsPriority == nil then c.hsPriority = false end
     -- Split the old single heal-weave toggle into two independent behaviours
     -- (CS reload of Holy Shock, and Holy Strike filler), then retire it.
     if c.healReloadCS == nil then c.healReloadCS = (c.healWeaveStrikes ~= false) end
@@ -1169,6 +1181,11 @@ end
 
 function M:Reachable(u)
     if UnitIsUnit(u, "player") then return true end
+    -- Recently refused by the client (no line of sight, or out of range after
+    -- IsSpellInRange could not judge). Never for yourself: you are always in
+    -- your own line of sight, and a stale mark would drop you from your own
+    -- heal list.
+    if Aegis_SBR:CastBlocked(u) then return false end
     if self:KnowsSpell("Flash of Light") then return Aegis_SBR:SpellReaches("Flash of Light", u)
     elseif self:KnowsSpell("Holy Light") then return Aegis_SBR:SpellReaches("Holy Light", u) end
     return CheckInteractDistance(u, 4)
@@ -1619,6 +1636,7 @@ function M:CastOn(spell, unit)
         p.reason = "on " .. (UnitName(unit) or unit or "?")
         return
     end
+    Aegis_SBR:NoteUnitCast(unit)
     CastSpellByName(spell, unit)
 end
 
@@ -1820,19 +1838,27 @@ function M:DoHeal(cfg)
     -- failed to reach (this was the bug: previously nothing was cast at all
     -- for a hurt unit sitting in that 20-40yd gap).
     if cfg.useHolyShock and self:KnowsSpell("Holy Shock") and self:OwnCDReady("Holy Shock")
-        -- Below the emergency line, or out of melee reach where only an instant
-        -- heal gets there in time.
+        -- Below the emergency line. That line, and nothing else.
         --
-        -- The range half must never apply to YOURSELF. CheckInteractDistance is
-        -- an interaction range to another unit and gives no usable answer about
-        -- the player, so "not CheckInteractDistance('player', 3)" read as true
-        -- and cancelled the health threshold outright: Holy Shock went onto the
-        -- paladin at any health, the moment it came off cooldown. Reported as
-        -- "the heal spam on full health uses Holy Shock without any regard to
-        -- threshold" - and it is the same defect that was leaving the paladin out
-        -- of his own Holy Strike headcount.
-        and (pct <= (cfg.holyShockPct or 50) / 100
-            or (not UnitIsUnit(unit, "player") and not CheckInteractDistance(unit, 3)))
+        -- There used to be a second way in: "or the target is further than ten
+        -- yards away", on the reasoning that only an instant heal reaches
+        -- somebody out of MELEE range. That reasoning does not survive contact
+        -- with a healer - Flash of Light and Holy Light both reach forty yards,
+        -- so melee range has nothing to do with whether a normal heal lands.
+        -- What the clause actually said was "anybody standing more than ten
+        -- yards away", which in a party is most people and in a raid is nearly
+        -- everybody: the emergency instant fired on any hurt group member at any
+        -- health, and the slider it is configured with meant nothing. Reported
+        -- as "I set Holy Shock to below 50% but the rotation spams it way
+        -- earlier". Melee range still decides one thing, the Holy Strike splash,
+        -- and it is checked there.
+        --
+        -- An earlier round of the same defect narrowed that clause to exclude
+        -- the player, because CheckInteractDistance gives no usable answer about
+        -- yourself and so read as "far away" - which put Holy Shock on the
+        -- paladin at full health. Narrowing it was treating the symptom; the
+        -- clause itself was the fault.
+        and pct <= (cfg.holyShockPct or 50) / 100
         and Aegis_SBR:SpellReaches("Holy Shock", unit) then
         local hs, amt = self:PickRank("Holy Shock", hsEff, self.HS_MANA, rankDeficit, mana)
         if hs then
@@ -2060,7 +2086,7 @@ function M:CureStep(cfg, worst)
     if not self:GcdReady() or self:StillCasting() then return false end
     -- Somebody is hurt enough that the heal comes first.
     if worst and worst < ((cfg.curePct or 90) / 100) then return false end
-    local unit, spell = Aegis_SBR:PickCure(self:CureUnitOrder(cfg), self.CURES,
+    local unit, spell = Aegis_SBR:PickCure(Aegis_SBR:AppendPets(self:CureUnitOrder(cfg)), self.CURES,
         function(u) return self:Reachable(u) end, self.cureFail)
     if not unit or not spell then return false end
     if not self:Affordable(spell) then return false end
@@ -2237,15 +2263,49 @@ function M:Rotate(cfg)
         if self:CureStep(cfg, worst) then return end
     end
 
-    -- HEALING FIRST. Everything else in heal mode is an optimisation of the
-    -- quiet moments, and every one of them used to run above the heal: the
-    -- Crusader Strike reload, then the Holy Strike splash. Reported from play as
-    -- a rotation that strikes while a heal is wanted.
-    if cfg.healMode and self:DoHeal(cfg) then return end
+    -- The three steps that are allowed ABOVE the healing, and only these.
+    --
+    -- Everything else in heal mode is an optimisation of the quiet moments, and
+    -- it stays below the heal. That ordering was measured against a real log:
+    -- with the heal threshold at 95%, somebody was under it on 98% of presses,
+    -- the heal claimed 99% of them, and the whole block below ran ONE time in
+    -- 1267 presses. In a dungeon there are lulls; in a battleground there are
+    -- none, and every "quiet moment" step starves completely.
+    if cfg.healMode then
+        -- Is anybody in the emergency band? The two mana steps yield to that;
+        -- Holy Strike deliberately does not (see below).
+        local _, _, worstPct = self:WorstHurt((cfg.healThreshold or 75) / 100, cfg)
+        local emergency = worstPct and worstPct <= (cfg.holyShockPct or 50) / 100
 
-    -- Seal of Wisdom, above the "needs an enemy" guard below: it is a self buff,
-    -- and it is what pays for the next heal.
-    if cfg.healMode and self:HealSealUp(cfg) then return end
+        -- 1. Holy Strike, on cooldown, ahead of the healing itself.
+        --
+        -- Opt-in, and above EVERYTHING when it is on - which is how it was
+        -- specified and is not an oversight. Holy Strike is not a damage ability
+        -- that happens to heal: it splash-heals the group and returns mana
+        -- through Seal of Wisdom in the same swing, which is why it outranks a
+        -- single-target heal often enough to be worth a switch.
+        --
+        -- No emergency guard here on purpose. The control the player has is
+        -- range: HolyStrikeDue requires melee, so stepping back turns this off
+        -- and leaves an ordinary healing rotation. Its own two thresholds still
+        -- apply - they are restrictions the player set themselves.
+        if cfg.hsPriority and self:HolyStrikeDue(cfg) then
+            if self:CastStrike("Holy Strike", cfg) then return end
+        end
+
+        -- 2. Seal of Wisdom when it has run out. A self buff: no target, no
+        -- enemy, no melee range, one global cooldown - and it pays for every
+        -- heal after it. Measured in the same log: 17% of presses under 10%
+        -- mana, seven of them at zero.
+        if not emergency and self:HealSealUp(cfg) then return end
+
+        -- 3. Judgement of Wisdom, once, so the group gets mana back too. Once
+        -- per mob and then Holy Strike's hits keep it up, so it is cheap - but
+        -- it never came up at all from below the heal.
+        if not emergency and self:HealSeals(cfg) then return end
+    end
+
+    if cfg.healMode and self:DoHeal(cfg) then return end
 
     -- Heal mode works at range with no target; everything below needs an
     -- attackable target, so stop here when there is none.
@@ -2260,21 +2320,20 @@ function M:Rotate(cfg)
     if cfg.healMode then
         -- Holy Strike, the splash heal - but never over somebody in real danger,
         -- who needs a cast aimed at them rather than an area effect.
-        local _, _, worst = self:WorstHurt((cfg.healThreshold or 75) / 100)
-        if not (worst and worst <= (cfg.holyShockPct or 50) / 100) then
-            if self:HolyStrikeDue(cfg) then
-                if self:CastStrike("Holy Strike", cfg) then return end
+        -- Only when the switch above is OFF; with it on, Holy Strike has
+        -- already had its say ahead of the heal.
+        if not cfg.hsPriority then
+            local _, _, worst = self:WorstHurt((cfg.healThreshold or 75) / 100, cfg)
+            if not (worst and worst <= (cfg.holyShockPct or 50) / 100) then
+                if self:HolyStrikeDue(cfg) then
+                    if self:CastStrike("Holy Strike", cfg) then return end
+                end
             end
         end
 
-        -- Seal upkeep ABOVE the two fillers below it. Seal of Wisdom is what
-        -- pays for the next heal, so it cannot sit behind a Crusader Strike that
-        -- exists only to shorten a cooldown. Reported as "Holy Strike is being
-        -- done without Seal of Wisdom".
-        if self:HealSeals(cfg) then return end
-        -- Last of the lull steps: it applies nothing and heals nobody, it only
-        -- makes the NEXT heal faster, so it takes a global cooldown none of the
-        -- above wanted.
+        -- Seal of Wisdom and its judgement have moved above the heal, where
+        -- they can actually be reached; they are not repeated here. What is left
+        -- in this block only shortens a cooldown.
         -- Reload Holy Shock last of the strike-shaped steps: it applies nothing
         -- and heals nobody, it only shortens a cooldown.
         if self:HealStrikeEngine(cfg) then return end

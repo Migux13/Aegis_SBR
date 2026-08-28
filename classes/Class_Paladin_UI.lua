@@ -184,6 +184,7 @@ function M:BuildBody(ui, parent)
         slider = { key = "hsMinHP", min = 50, max = 100, step = 1, suffix = "%", onChange = set("hsMinHP") } }
     self.hsMinTargetsRow = L:Row{ label = "and at least this many",
         slider = { key = "hsMinTargets", min = 1, max = 5, step = 1, suffix = "", onChange = set("hsMinTargets") } }
+    self.hsPriorityRow = L:Row{ key = "hsPriority", label = "Before healing", onToggle = set("hsPriority") }
 
     -- The switches that reorder the queue, cheapest to explain first. "Use
     -- priority list" sits LAST because the block it unfolds docks directly
@@ -289,7 +290,8 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.holyShockRow.cb, "Holy Shock emergencies", "In heal mode Holy Shock is used ONLY as an instant heal, never for damage.", "Fires for an emergency or a hurt unit out of melee range, below the health value on the right.")
     ui:Tip(self.holyShockRow.slider, "Holy Shock below", "Health under which Holy Shock is used as an instant emergency heal.", "Below this same line, Flash of Light is also kept over Holy Light even for a big deficit - faster beats fuller when it's this close. Also /sbr hsat <1-100>. +healing auto-reads from gear; override with /sbr healpower <n>.")
     ui:Tip(self.healReloadRow.cb, "Reload with Crusader Strike", "When Holy Shock is on cooldown, use Crusader Strike to reset it (Blessed Strikes, auto-detected), keeping the emergency instant loaded.", "Uses a GCD, but never fires while anyone is below the Holy Shock line - the heal comes first. Not limited by the filler mana floor.")
-    ui:Tip(self.healSplashRow.cb, "Use Holy Strike", "Holy Strike splash-heals everyone near you, so it is used on a HEADCOUNT: enough people scratched, rather than one person hurt badly.", "Runs ahead of direct healing once the two thresholds below are met, but never while somebody is under the Holy Shock emergency line. No mana floor: it returns mana rather than costing it.")
+    ui:Tip(self.healSplashRow.cb, "Use Holy Strike", "Holy Strike splash-heals everyone near you, so it is used on a HEADCOUNT: enough people scratched, rather than one person hurt badly.", "Used in the quiet moments between heals, once the two thresholds below are met, and never while somebody is under the Holy Shock emergency line. No mana floor: it returns mana rather than costing it.")
+    ui:Tip(self.hsPriorityRow.cb, "Before healing", "Puts Holy Strike ahead of the healing itself: on cooldown, whenever you are in melee range.", "It splash-heals the group and returns mana in the same swing, which a direct heal does not - so a paladin casting only Flash of Light and Holy Light gives both away. The cost is real: a strike takes the global cooldown a heal wanted, so somebody occasionally waits a beat longer. Your control is where you stand. Step out of melee and this switches itself off.")
 
     ui:Tip(self.hsMinHPRow.slider, "Group member below", "Health at or under which a group member counts toward the Holy Strike trigger. 100% means anyone not at full health counts.", "These two RESTRICT Holy Strike. At the defaults it simply goes out on cooldown, which is what it is for - a damage ability whose splash heal is a bonus. Tighten them only if you want it held back.")
     ui:Tip(self.hsMinTargetsRow.slider, "and at least this many", "How many group members within 10 yards must be under that health before Holy Strike is used. 1 means it is effectively unrestricted.", "Raise it in a raid, where a splash on three scratched people is worth more than a swing. It always yields to direct healing, and never fires while somebody is below the emergency line.")
@@ -449,6 +451,9 @@ function M:RefreshBody(ui, buf)
     end
 
     ui:BindCheck(self.healSplashRow, buf.healSplashHS ~= false)
+    ui:BindCheck(self.hsPriorityRow, buf.hsPriority)
+    -- BindCheck re-enables every box it binds, so the greying has to follow it.
+    if buf.healSplashHS == false then self.hsPriorityRow.cb:Disable() end
 
     -- Heal-mode mana upkeep. Both need Seal of Wisdom; shown OFF and greyed while
     -- it is not learned, without touching the stored value.

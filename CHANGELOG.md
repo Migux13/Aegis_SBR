@@ -4,6 +4,98 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.3 — Holy Strike before the heal, and three defects a log made visible
+
+A conversation with a level 60 holy paladin, four play reports, and a captured session log
+that settled every one of them with a number.
+
+### ✨ New — "Before healing", a switch under Holy Strike
+
+Off by default, because it is a real trade rather than a free win.
+
+On, *Holy Strike* goes out on cooldown **ahead of the healing itself**, whenever you are in
+melee range. The case for it, from a paladin who healed at 60 with it: Holy Strike is not a
+damage ability that happens to splash — it heals the group **and** returns mana through *Seal of
+Wisdom* in the same swing, and a paladin casting only *Flash of Light* and *Holy Light* gives
+both away. The rotation it produces is Holy Strike, then a *Holy Light* under *Holy Judgement*
+or two *Flashes of Light* while the strike comes back.
+
+Deliberately **without** an emergency guard, unlike every other step. The control is where you
+stand: the strike requires melee range, so stepping back turns the switch off in practice and
+leaves an ordinary healing rotation. Its own two thresholds still apply — those are restrictions
+you set yourself.
+
+The cost, stated plainly because it is real: a strike takes a global cooldown a direct heal
+wanted, so somebody occasionally waits a beat longer.
+
+### ⚡ Seal of Wisdom and its judgement moved above the heal
+
+Not a preference — they were unreachable. From a captured session: with the heal threshold at
+95%, somebody was under it on **98% of presses**, the heal claimed **99%** of them, and the
+entire block of "quiet moment" steps below it ran **once in 1267 presses**. In a dungeon there
+are lulls. In a battleground there are none, and every step down there starves completely. The
+same log shows 17% of presses under 10% mana and seven at zero, which is what that starvation
+costs.
+
+Both still yield when somebody is under the *Holy Shock* emergency line. Holy Strike does not,
+because Holy Strike is itself a heal; the seal is not.
+
+### 🐛 Fixed — Holy Shock ignored its own threshold
+
+**Measured: 38 of 85 casts fired above the configured line, one at 94% health.** The decision
+line logged immediately before each of them reads `emg=N` — the emergency test said no, and the
+cast went out anyway.
+
+The condition had a second way in, joined by `or`: *"...or the target is standing more than ten
+yards away"*, on the reasoning that only an instant heal reaches somebody out of **melee**
+range. That reasoning does not survive contact with a healer — *Flash of Light* and *Holy Light*
+both reach forty yards, so melee range has nothing to do with whether a normal heal lands. What
+the clause actually meant was "anybody more than ten yards away", which in a party is most
+people and in a raid is nearly everybody: the emergency instant fired on any hurt group member
+at any health, and the slider meant nothing.
+
+An earlier round of the same report was answered by narrowing that clause to exclude the player.
+That was treating the symptom. The clause itself was the fault, and it is gone — the threshold
+is now the only gate, exactly as the panel promises.
+
+### 🐛 Fixed — a refused cast repeated forever
+
+There was **no error handling anywhere in the addon**. When the client refused a cast for line
+of sight, nothing changed: the same person was still the worst hurt on the next press, so they
+were picked again, refused again, indefinitely. Reported from Alterac Valley, where a raid is
+spread across a whole zone and both line of sight and range are the normal case.
+
+The core now listens for the client's own refusal messages — compared against its own strings,
+so it holds in any locale — and stands that unit down for five seconds. Never yourself. It
+covers every healer and the mage's decursing.
+
+Line of sight is the one answer no API gives in advance: `IsSpellInRange` measures distance and
+knows nothing about the hill in between, and it returns "cannot judge" often enough that a heal
+target can be chosen who was never castable.
+
+### 🐛 Fixed — pets were never dispelled
+
+Pets carry poisons, diseases and curses like anybody else, and a hunter's pet dying to a poison
+is a third of that hunter's damage gone. They were simply never in the list: the roster helpers
+are shared with the healing engines, where healing a pet is its own opt-in decision. All five
+dispelling classes now include them, appended after the players — within one affliction type the
+order decides who is cured first, and a player outranks a pet there.
+
+### 🐛 Fixed — the raid dispel optimisation had never run
+
+`Aegis_SBR.lua` contained a 120-line region **twice**. Three of the four functions were
+identical; the fourth, `PickCure`, was not — the second copy was the **old** version, the one
+that reads every unit's debuffs inside the affliction-type loop. Lua keeps the last definition,
+so the old one is what ran.
+
+The raid-scale fix written for it — one debuff pass instead of four, thousands of API calls per
+second saved in a forty-man group — had been dead code since the day it was added. Same class of
+defect as the duplicated paladin module, and invisible for the same reason: the file was
+perfectly valid Lua. The duplicate scan now covers every file in the addon; no other is
+affected.
+
+---
+
 ## v1.2.2 — Auto-attack that stays on
 
 **Bug fix from a play report: spamming the macro toggled auto-attack on and off.** No ability
