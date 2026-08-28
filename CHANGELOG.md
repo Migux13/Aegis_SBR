@@ -4,6 +4,44 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.2 — Auto-attack that stays on
+
+**Bug fix from a play report: spamming the macro toggled auto-attack on and off.** No ability
+priority changed — this is the white swing, not the rotation.
+
+`EnsureAutoAttack` has two paths. When **Attack** sits on an action bar it reads the swing
+state (`IsCurrentAction`) and only starts what is not already running — correct, and
+untouched. When Attack is on **no** bar there is no slot to read state from, and it fell
+through to a bare `AttackTarget()` on every press.
+
+`AttackTarget()` is a **toggle** on 1.12 — it *stops* a swing that is already running. There
+is no Lua `/startattack` equivalent; that arrived in 2.0. So the fallback flipped auto-attack
+off as often as on, once per press. The comment above it claimed the opposite, which is why it
+survived this long.
+
+It now fires **at most once per target** — enough to open the swing, never enough to
+flip-flop. If something else stops the swing afterwards it deliberately does not retry: from
+that branch "not swinging" and "swinging" are indistinguishable, and a blind retry is the bug
+being removed.
+
+**Who this hit:** Warrior, Rogue and Paladin (the three classes that use the core's swing
+path), and especially anyone running **SuperCleveRoidMacros** — SCRM drives the swing with
+`/startattack`, so its users are precisely the people who never bother slotting Attack, which
+is what selects the broken branch.
+
+**The better fix is one you make yourself:** put **Attack** on an action bar, in any slot the
+stance/form bar does not overwrite. That switches you to the guarded path, which can read the
+swing state and restart it whenever it actually drops — self-healing, where the fallback can
+only ever open the swing once.
+
+Docs: `docs/dependencies.md` now records SuperCleveRoidMacros as **`brues-code/…`**, the
+active fork the user runs, rather than the archived `jrc13245` repo the section was originally
+written against — with a note that the behavioural detail there was verified against the old
+fork and wants re-checking. `/startattack` and `/stopattack` are confirmed present on the new
+wiki; whether they toggle or are start-only is not stated there.
+
+---
+
 ## v1.2.1 — Emergencies that wait for an emergency
 
 All four from a play report, and three of them were the addon doing something rather than

@@ -17,7 +17,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.2.1",
+    ver = "1.2.2",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -1120,11 +1120,29 @@ function Aegis_SBR:EnsureAutoAttack()
         -- is a no-op if SCRM (or the player) already started the swing.
         if not IsCurrentAction(slot) then UseAction(slot) end
     elseif AttackTarget then
-        -- No Attack on any bar (common on Warriors who never place it): the
-        -- vanilla AttackTarget() starts the melee swing directly, no slot
-        -- needed. It only begins a swing if one is not already going, so it is
-        -- likewise safe to call every tick.
-        AttackTarget()
+        -- No Attack on any bar (common on Warriors who never place it, and on
+        -- anyone running SuperCleveRoidMacros, which drives the swing with
+        -- /startattack so the button never needs slotting).
+        --
+        -- AttackTarget() is a TOGGLE on 1.12 - it STOPS the swing when one is
+        -- already running, and there is no /startattack equivalent in the Lua
+        -- API (that arrived in 2.0). With no slot there is also nothing to read
+        -- IsCurrentAction from, so the state cannot be checked first. Calling it
+        -- every press therefore flipped auto-attack off as often as on, which is
+        -- exactly what spamming the macro looked like in game.
+        --
+        -- Fired at most once per target instead: enough to open the swing on a
+        -- fresh target, never enough to flip-flop under spam. If something else
+        -- stops the swing later we deliberately do NOT retry, because from here
+        -- "not swinging" and "swinging" are indistinguishable - a blind retry is
+        -- the bug being removed. Put Attack on a bar (any slot the stance/form
+        -- bar does not overwrite) to get the guarded path above, which can read
+        -- the state and restart the swing whenever it actually drops.
+        local id = self:TargetId()
+        if id ~= self.attackToggledFor then
+            self.attackToggledFor = id
+            AttackTarget()
+        end
     end
 end
 
