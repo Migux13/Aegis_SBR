@@ -327,6 +327,7 @@ function Aegis_SBR:Pick(name, reason)
     -- Counts real presses. The preview window uses it to know when the answer
     -- has legitimately changed, instead of redrawing on every sub-second wobble.
     Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    Aegis_SBR:NoteSpellCast(name)
     CastSpellByName(name)
     return true
 end
@@ -343,6 +344,7 @@ function Aegis_SBR:PickQueue(name, reason)
     -- Counts real presses. The preview window uses it to know when the answer
     -- has legitimately changed, instead of redrawing on every sub-second wobble.
     Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    Aegis_SBR:NoteSpellCast(name)
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -1157,19 +1159,60 @@ local CAST_REFUSED = {
     SPELL_FAILED_LINE_OF_SIGHT or "Target not in line of sight",
     SPELL_FAILED_OUT_OF_RANGE or "Out of range",
     SPELL_FAILED_TOO_CLOSE or "Target too close",
+    SPELL_FAILED_UNIT_NOT_INFRONT or "Target needs to be in front of you",
+    SPELL_FAILED_MOVING or "Can't do that while moving",
 }
 
+-- Spells the client has just refused, by name, with the time it said so.
+--
+-- Separate from castBlocked above, which is about a UNIT and is used to stop
+-- picking somebody unreachable. This one is about the SPELL, and exists because
+-- several modules keep a "we just cast this, do not send it again" throttle -
+-- which is correct after a cast that happened, and wrong after one the client
+-- threw away. Hunter's Mark carries a 110 second throttle and the first Serpent
+-- Sting of a session fifteen: refused once at the start of a pull, either goes
+-- unapplied for that long. Reported exactly that way.
+Aegis_SBR.spellRefused = {}
+
+-- Was this spell refused at or after the moment `t` - the moment a throttle was
+-- stamped? Timestamps rather than ordering, because the error and the stamp can
+-- land in either order within one frame and both must give the same answer.
+function Aegis_SBR:SpellRefusedSince(name, t)
+    if not name or not t then return false end
+    local r = self.spellRefused[name]
+    return (r and r >= t) and true or false
+end
+
+-- Remember what we just sent, so an error message that names no spell can be
+-- attributed to it. Called by the shared Pick/PickQueue and by the class
+-- wrappers that cast directly.
+function Aegis_SBR:NoteSpellCast(name)
+    self.lastSpell = name
+    self.lastSpellAt = GetTime()
+end
+
 function Aegis_SBR:OnCastError(msg)
-    if not msg or not self.lastUnitCast then return end
-    if (GetTime() - (self.lastUnitCastAt or 0)) > BLAME_WINDOW then return end
+    if not msg then return end
+    local refused = false
     for i = 1, table.getn(CAST_REFUSED) do
-        if msg == CAST_REFUSED[i] then
-            self.castBlocked[self.lastUnitCast] = GetTime()
-            -- Spent: one refusal marks one unit, so the next error cannot be
-            -- blamed on the same cast.
-            self.lastUnitCast = nil
-            return
-        end
+        if msg == CAST_REFUSED[i] then refused = true; break end
+    end
+    if not refused then return end
+    local now = GetTime()
+
+    -- The spell, for the throttles that must not treat a thrown-away cast as a
+    -- cast that happened.
+    if self.lastSpell and (now - (self.lastSpellAt or 0)) <= BLAME_WINDOW then
+        self.spellRefused[self.lastSpell] = now
+        self.lastSpell = nil
+    end
+
+    -- The unit, for the heal target selection.
+    if self.lastUnitCast and (now - (self.lastUnitCastAt or 0)) <= BLAME_WINDOW then
+        self.castBlocked[self.lastUnitCast] = now
+        -- Spent: one refusal marks one unit, so the next error cannot be blamed
+        -- on the same cast.
+        self.lastUnitCast = nil
     end
 end
 

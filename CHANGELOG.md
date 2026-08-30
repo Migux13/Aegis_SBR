@@ -91,6 +91,50 @@ below** (default 40%) no filler runs at all and what is left is kept for healing
 the melee tabs' mana management, which latches and is about pacing a damage rotation; this is one
 line doing one thing. 0 disables it.
 
+### 🐛 Fixed — Hunter's Mark and Serpent Sting were not retried when the first one failed
+
+Reported as *"now and then Hunter's Mark and Serpent Sting are not tried again when they miss at
+the start"*. Two separate faults, and the question that found the real one was **"why don't you
+just read the debuffs off the target?"**
+
+It does. `MaintainDebuff` and `MaintainSting` check the target first, through two independent
+detections. The throttle underneath them only applies when the debuff is **not** up, and exists
+for one narrow purpose: the beat between a cast being sent and the debuff appearing.
+
+The wait for that beat was **110 seconds** for Hunter's Mark and **15** for Serpent Sting —
+each spell's own duration. That is the correct answer only on a client that *cannot* read the
+debuff back, where the timer is the whole knowledge. Where it can be read, the read is the
+authority, and waiting out the full duration after it reports "not up" leaves the target
+unmarked for most of two minutes.
+
+The stings already carried the correction; **Hunter's Mark and Lacerate never got it**, though
+they run through the same function and use the same detection. Now all of them work the same
+way: reading the debuff once is the proof that reading works, after which the throttle waits out
+the registration beat and nothing more.
+
+### 🐛 Fixed — a cast the client threw away counted as a cast
+
+The second fault, and the reason a throttle could be standing at all. `Pick` and `Queue` report
+success as soon as a spell is known and affordable, so the throttle was stamped on the attempt,
+not on the outcome. Resists and misses were already handled through the combat log — but **out
+of range, no line of sight and "target needs to be in front of you" arrive as an error message
+and never appear in the combat log at all.** For a hunter that is the normal case when opening:
+Hunter's Mark reaches 100 yards, Serpent Sting 35.
+
+The core now records the spell it last sent and exposes `SpellRefusedSince(spell, when)`, and a
+throttle stamped at or before a refusal is discarded. Deliberately compared by **timestamp
+rather than ordering**: the error and the stamp can land in either order within one frame, and
+both must give the same answer.
+
+Which combat-log channel carries a missed shot depends on how the client classifies it — a sting
+is a ranged attack that applies a debuff, and the two channels split on exactly that distinction.
+Rather than assume, **both are read** with the same narrow matcher: only a line naming one of our
+own tracked shots does anything. If the message never arrives on one of them, listening costs
+nothing.
+
+The hunter trace now carries `hold=` for both, the one piece of state that can keep a debuff
+missing while every other field looks correct.
+
 ### 🔍 The warlock says when it is standing still and why
 
 Three places can hold the whole rotation without casting: a running channel, the Dark Harvest
