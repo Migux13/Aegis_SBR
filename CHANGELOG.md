@@ -4,6 +4,102 @@ All notable changes to **Aegis: Single Button Rotation** (formerly **AutoRota**)
 
 ---
 
+## v1.2.5 — Knowing whether you are moving
+
+The client has no speed API, so nothing in the addon ever knew. Two classes were paying for that
+in different ways, and one play report named both.
+
+### ✨ Movement detection, in the core
+
+Measured the way the movement-speed addons measure it: our own position, sampled every 0.2s and
+differenced, through SuperWoW's `UnitPosition`. The sample interval is what makes it usable —
+two presses can be a tenth of a second apart, and over that gap a walking character barely
+moves, so differencing every press reads as standing still half the time.
+
+It answers **"standing still" when it cannot tell** (no SuperWoW, no reading yet). "Cannot
+judge" must never block a cast; the same rule the range checks follow.
+
+There is a second question next to it, and the difference between them turned out to matter:
+`StillFor(seconds)` asks how long you have been stationary. Stopping is not a commitment to stay
+stopped — a step to reposition puts a fraction of a second of stillness in the middle of moving.
+
+### 🐛 Fixed — the warlock stalled while moving, and the DoT never landed
+
+Both halves of that report are one defect. `ApplyDot` sends the DoT and answers *"cast"*, on
+which the caller returns from the **whole** rotation. For *Corruption* or *Immolate* that is a
+spell with a cast time, movement breaks it, and the next press does the same thing again: every
+press spent on a cast that cannot finish, the DoT never applied, and nothing else ever reached.
+
+A DoT that is not instant **for this character** is now skipped while moving, and the chain
+carries on to the ones that are instant and then to the filler. Reported as *"up"* rather than
+*"wait"* deliberately — *"wait"* returns from the rotation, which is the stall being fixed.
+
+Cast times include the talents: *Corruption* 2.0s less 0.4s per rank of **Improved Corruption**,
+so instant at 5/5 — exactly the line described from play as *"an affliction warlock uses nothing
+but instant DoTs from about level 30"*. *Immolate* 2.0s less 0.1s per rank of **Bane**, never
+instant.
+
+### ✨ Channels are not attempted while moving
+
+Movement breaks a channel outright, so starting one while running is not a slightly worse cast —
+it is a global cooldown spent on nothing. *Drain Life*, *Drain Soul*, *Dark Harvest* and *Health
+Funnel* are refused while moving and the caller falls through to whatever it would have done
+otherwise.
+
+Refused in `Queue` rather than at each decision, because there are **six** channel sites and one
+of them would eventually be forgotten. That exposed a second, older problem on the way: seven
+call sites cast a spell and returned **without checking whether the cast was accepted**. Each of
+those would have spent the press on nothing. They all fall through now.
+
+### ✨ Consecration only while standing still (all four tabs)
+
+From play: *"when you are moving the mobs are moving too, so dropping AoE might be a bad idea"*.
+The patch lands on ground everybody is about to leave — the mana is spent, the damage is not
+dealt, and the threat lands on nothing.
+
+**On by default**, which is this file's exception to "new switches start off": the behaviour it
+replaces is the accident, not the feature. Off restores casting on cooldown regardless, which a
+tank who repositions constantly may well prefer, since a held Consecration is threat not made.
+
+It waits for a **dwell of two seconds**, not for the instant you stop. That correction came from
+the sharpest review this addon has had: *"rotation going: ah, this person hasn't moved for one
+second, seems like a good time to fart gold"*. Two seconds against an eight second patch is long
+enough that a step is not mistaken for a stand, and short enough that a real fight never waits —
+you are stationary the moment melee starts.
+
+One setting, shown on all four tabs, because it is one decision.
+
+### ✨ Damage fillers for heal mode
+
+Three switches, all off by default, all **last** in the order — below the healing, the seal, the
+judgement, the splash and the Holy Shock reload. A press that reaches them was wanted by nothing
+else.
+
+- **Hammer of Wrath** — instant, own cooldown, only legal inside the execute window, so it can
+  never have been a heal you gave up.
+- **Exorcism** — one strong nuke against Undead and Demon targets, gated on creature type.
+- **Consecration** — the one with a real cost: mana that would have been heals, and threat on
+  everything standing in it. As a healer that is a decision, hence its own switch.
+
+None of them is gated on the Tank/DPS spell toggles. A checkbox on the Healer tab that silently
+does nothing because of a setting on another page is a trap.
+
+### ✨ Fillers stop below a mana line
+
+Asked for in the same report, and the right shape: a spare press is not spare mana. Below **Stop
+below** (default 40%) no filler runs at all and what is left is kept for healing. Independent of
+the melee tabs' mana management, which latches and is about pacing a damage rotation; this is one
+line doing one thing. 0 disables it.
+
+### 🔍 The warlock says when it is standing still and why
+
+Three places can hold the whole rotation without casting: a running channel, the Dark Harvest
+guard, and a DoT answering *"wait"*. All three now write a `STALL` line to `/sbr trace` naming
+which one it was and for how long — including which of the two DoT waits it is, a cast awaiting
+confirmation or the interval after a confirmed cast whose debuff is not visible yet.
+
+---
+
 ## v1.2.4 — The talent slot picks the tab
 
 ### ✨ New — bind a spec tab to a Goblin Brainwashing Device slot

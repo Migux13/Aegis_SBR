@@ -111,6 +111,7 @@ function M:BuildBody(ui, parent)
     self.spellCB.repentance = L:Row{ key = "repentance", label = "Repentance", spell = "Repentance", onToggle = sset("repentance") }
     self.spellCB.consecration = L:Row{ key = "consecration", label = "Consecration", spell = "Consecration", onToggle = sset("consecration") }
     self.consecManaRow = L:Row{ key = "consecInMana", label = "Consecration also in mana recovery", onToggle = set("consecInMana") }
+    self.consecStillRow = L:Row{ key = "consecStill", label = "Only while standing still", onToggle = set("consecStill") }
     self.spellCB.exorcism = L:Row{ key = "exorcism", label = "Exorcism", spell = "Exorcism", onToggle = sset("exorcism") }
     self.twistRow = L:Row{ key = "sealTwist", label = "Seal twisting", onToggle = set("sealTwist") }
 
@@ -185,6 +186,16 @@ function M:BuildBody(ui, parent)
     self.hsMinTargetsRow = L:Row{ label = "and at least this many",
         slider = { key = "hsMinTargets", min = 1, max = 5, step = 1, suffix = "", onChange = set("hsMinTargets") } }
     self.hsPriorityRow = L:Row{ key = "hsPriority", label = "Before healing", onToggle = set("hsPriority") }
+
+    L:Header("Damage fillers", "heal")
+    self.fillerHoWRow = L:Row{ key = "healFillerHoW", label = "Hammer of Wrath", spell = "Hammer of Wrath", onToggle = set("healFillerHoW") }
+    self.fillerConsecRow = L:Row{ key = "healFillerConsec", label = "Consecration", spell = "Consecration", onToggle = set("healFillerConsec") }
+    -- Same field as the row in Spells: one setting, shown on whichever tab you
+    -- happen to be looking at.
+    self.consecStillHealRow = L:Row{ key = "consecStill", label = "Only while standing still", onToggle = set("consecStill") }
+    self.fillerExoRow = L:Row{ key = "healFillerExo", label = "Exorcism", spell = "Exorcism", onToggle = set("healFillerExo") }
+    self.fillerManaRow = L:Row{ label = "Stop below",
+        slider = { key = "healFillerMana", min = 0, max = 90, step = 5, suffix = "%", onChange = set("healFillerMana") } }
 
     -- The switches that reorder the queue, cheapest to explain first. "Use
     -- priority list" sits LAST because the block it unfolds docks directly
@@ -275,6 +286,12 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.spellCB.hammerOfWrath.cb,  "Hammer of Wrath", "Execute, used only at or below 20 percent target HP.")
     ui:Tip(self.spellCB.repentance.cb,     "Repentance",      "Cast on cooldown as a damage proc on Turtle.")
     ui:Tip(self.spellCB.consecration.cb,   "Consecration (AoE)", "AoE filler, cast on cooldown. Manual toggle (also /sbr aoe), since 1.12 cannot count nearby enemies.", "Held during mana recovery unless the option below is on.")
+    -- One setting, two rows (Spells on the melee tabs, Damage fillers on the
+    -- healer tab), so the text is written once.
+    local csTip1 = "Holds Consecration until you have been standing still for a couple of seconds."
+    local csTip2 = "When you are moving the mobs usually are too, so the patch lands on ground everybody is about to leave: the mana is spent and the damage is not dealt. It waits for a short DWELL rather than the instant you stop, because stopping is not the same as staying - a step to reposition is a fraction of a second of standing still. Turn it off to have it on cooldown regardless; a tank who repositions constantly may prefer that, since a held Consecration is threat not made. Without SuperWoW movement cannot be measured and this never blocks anything."
+    ui:Tip(self.consecStillRow.cb, "Only while standing still", csTip1, csTip2)
+    ui:Tip(self.consecStillHealRow.cb, "Only while standing still", csTip1, csTip2)
     ui:Tip(self.consecManaRow.cb, "Consecration also in mana recovery", "Keeps casting Consecration even while mana recovery is running, instead of holding it until mana is back up.", "Mana recovery LATCHES - on below 'Switch below', off only at 'Back above' - so with a wide band it can stay on all fight and keep Consecration suppressed. If yours never fires, this is why.")
     ui:Tip(self.spellCB.exorcism.cb,       "Exorcism",        "Strong nuke, used on cooldown but only against Undead and Demon targets.", "Held during mana recovery.")
     ui:Tip(self.spellCB.holyStrike.cb, "Holy Strike", "Shares the 6s strike cooldown with Crusader Strike.", "With Vengeful Strikes it grants Holy Might. Even untalented it returns mana and heals the group.")
@@ -296,6 +313,10 @@ function M:BuildBody(ui, parent)
     ui:Tip(self.holyShockRow.slider, "Holy Shock below", "Health under which Holy Shock is used as an instant emergency heal.", "Below this same line, Flash of Light is also kept over Holy Light even for a big deficit - faster beats fuller when it's this close. Also /sbr hsat <1-100>. +healing auto-reads from gear; override with /sbr healpower <n>.")
     ui:Tip(self.healReloadRow.cb, "Reload with Crusader Strike", "When Holy Shock is on cooldown, use Crusader Strike to reset it (Blessed Strikes, auto-detected), keeping the emergency instant loaded.", "Uses a GCD, but never fires while anyone is below the Holy Shock line - the heal comes first. Not limited by the filler mana floor.")
     ui:Tip(self.healSplashRow.cb, "Use Holy Strike", "Holy Strike splash-heals everyone near you, so it is used on a HEADCOUNT: enough people scratched, rather than one person hurt badly.", "Used in the quiet moments between heals, once the two thresholds below are met, and never while somebody is under the Holy Shock emergency line. No mana floor: it returns mana rather than costing it.")
+    ui:Tip(self.fillerHoWRow.cb, "Hammer of Wrath", "Used in heal mode when a press is left over: nobody needs healing, the seal is up, and the target is inside the execute window.", "Last in the order, below everything the Healer tab is for. Instant and on its own cooldown, so it can never be a heal you gave up - the window simply closes if unused.")
+    ui:Tip(self.fillerExoRow.cb, "Exorcism", "Used in heal mode when a press is left over and your target is Undead or Demon.", "On its own cooldown and gated on creature type, so it competes with nothing - the window is either there or it is not.")
+    ui:Tip(self.fillerManaRow.slider, "Stop below", "Below this share of mana no filler is used at all and the rest is kept for healing.", "A spare press is not spare mana. The fillers are free only while mana is not what limits you; the moment it is, every point belongs to the group. 0 disables the line and lets the fillers run at any mana.")
+    ui:Tip(self.fillerConsecRow.cb, "Consecration", "Used in heal mode when a press is left over and you are standing in melee range.", "The one filler with a real cost: it spends mana that would have been heals, and it makes threat on everything standing in it, which as a healer is a decision rather than a bonus. Held during mana recovery unless the Tank tab's opt-out is set.")
     ui:Tip(self.hsPriorityRow.cb, "Before healing", "Puts Holy Strike ahead of the healing itself: on cooldown, whenever you are in melee range.", "It splash-heals the group and returns mana in the same swing, which a direct heal does not - so a paladin casting only Flash of Light and Holy Light gives both away. The cost is real: a strike takes the global cooldown a heal wanted, so somebody occasionally waits a beat longer. Your control is where you stand. Step out of melee and this switches itself off.")
 
     ui:Tip(self.hsMinHPRow.slider, "Group member below", "Health at or under which a group member counts toward the Holy Strike trigger. 100% means anyone not at full health counts.", "These two RESTRICT Holy Strike. At the defaults it simply goes out on cooldown, which is what it is for - a damage ability whose splash heal is a bonus. Tighten them only if you want it held back.")
@@ -348,10 +369,15 @@ function M:RefreshBody(ui, buf)
     -- The mana-recovery override only means anything while Consecration itself
     -- is on, so it greys out with it.
     ui:BindCheck(self.consecManaRow, buf.consecInMana)
+    ui:BindCheck(self.consecStillRow, buf.consecStill ~= false)
+    ui:BindCheck(self.consecStillHealRow, buf.consecStill ~= false)
     if not buf.spells.consecration then
         self.consecManaRow.cb:Disable()
         ui:Color(self.consecManaRow.label, ui.COL.grey)
+        self.consecStillRow.cb:Disable()
+        ui:Color(self.consecStillRow.label, ui.COL.grey)
     end
+    if not buf.healFillerConsec then self.consecStillHealRow.cb:Disable() end
 
     -- Both-on strategy: only meaningful when BOTH strikes are enabled. With a
     -- single strike on it is used exclusively, so the box is greyed and its text
@@ -457,6 +483,17 @@ function M:RefreshBody(ui, buf)
 
     ui:BindCheck(self.healSplashRow, buf.healSplashHS ~= false)
     ui:BindCheck(self.hsPriorityRow, buf.hsPriority)
+    ui:BindCheck(self.fillerHoWRow, buf.healFillerHoW, "Hammer of Wrath")
+    ui:BindCheck(self.fillerConsecRow, buf.healFillerConsec, "Consecration")
+    ui:BindCheck(self.fillerExoRow, buf.healFillerExo, "Exorcism")
+    local fmv = buf.healFillerMana or 40
+    self.fillerManaRow.slider:SetValue(fmv)
+    if self.fillerManaRow.slider.valText then
+        self.fillerManaRow.slider.valText:SetText(fmv > 0 and ("<" .. fmv .. "%") or "off")
+    end
+    -- Only means anything while at least one filler is on.
+    local anyFiller = (buf.healFillerHoW or buf.healFillerConsec or buf.healFillerExo) and true or false
+    ui:SliderEnable(self.fillerManaRow.slider, anyFiller)
     -- BindCheck re-enables every box it binds, so the greying has to follow it.
     if buf.healSplashHS == false then self.hsPriorityRow.cb:Disable() end
 

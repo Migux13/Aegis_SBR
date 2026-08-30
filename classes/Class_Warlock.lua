@@ -267,6 +267,25 @@ M.dotDuration = {
 -- the other curses. Scales with the rank actually taken, not just presence.
 M.rapidDetSpells = { ["Corruption"] = true, ["Curse of Agony"] = true, ["Siphon Life"] = true }
 local TALENT_RAPID_DETERIORATION = "Rapid Deterioration"
+local TALENT_IMP_CORRUPTION = "Improved Corruption"
+local TALENT_BANE = "Bane"
+
+-- Base cast time of each DoT we apply. Anything absent is instant, which covers
+-- every curse and Siphon Life.
+--
+-- Needed for one question only: may this be cast while moving. Movement breaks a
+-- cast exactly as it breaks a channel, and the shape of that failure is worse -
+-- the rotation RETURNS after sending a DoT, so a cast movement keeps breaking
+-- takes every press and nothing else ever runs. Reported as "hangups in rotation
+-- and dot wasnt applied while moving", which is both halves of the same defect.
+--
+-- The talent reductions are the vanilla ones. If Turtle has changed a number,
+-- the symptom is mild and visible - a DoT skipped while running that could have
+-- landed - and `/sbr talents` prints the exact talent names to correct against.
+local DOT_CAST_TIME = {
+    ["Corruption"] = 2.0,   -- Improved Corruption: -0.4s per rank, instant at 5/5
+    ["Immolate"]   = 2.0,   -- Bane: -0.1s per rank, never instant
+}
 local RAPID_DETERIORATION_PCT_PER_RANK = 3
 
 -- Tick count for the three Dark-Harvest-eligible DoTs at max rank, taken
@@ -457,8 +476,30 @@ end
 -- completely once the wand was running - IsReady evidently does not clear
 -- reliably while auto-repeat is active on this server, so that gate was a
 -- dead end rather than an optimization. Removed; always act.
+-- Everything that CHANNELS. Movement breaks a channel outright, so starting one
+-- while running is not a slightly worse cast - it is a global cooldown spent on
+-- nothing at all.
+M.CHANNELED = {
+    ["Drain Life"]    = true,
+    ["Drain Soul"]    = true,
+    ["Dark Harvest"]  = true,
+    ["Health Funnel"] = true,
+}
+
 function M:Queue(name, reason)
     if not self:KnowsSpell(name) then return false end
+    -- Moving: refuse every channel, and let the caller fall through to whatever
+    -- it would have done otherwise. Refused here rather than at each decision
+    -- so no channel site can be forgotten - there are six of them.
+    --
+    -- The affliction rotation is built for exactly this: instant DoTs, the
+    -- instant Shadow Bolt off a Nightfall proc, and channels. Only the last of
+    -- those cares where you are standing, so moving costs nothing but the
+    -- channel, and standing still runs the complete rotation.
+    if M.CHANNELED[name] and Aegis_SBR:Moving() then
+        if self:Tracing() then self:Trace("moving, no " .. name) end
+        return false
+    end
     if Aegis_SBR.deciding then
         local p = Aegis_SBR.decidePlan
         p.spell = name; p.reason = reason; p.queue = true
@@ -522,6 +563,19 @@ end
 -- the total percent duration reduction for the rank actually taken (0, 3, or 6).
 function M:RapidDeteriorationPct()
     return self:TalentRank(TALENT_RAPID_DETERIORATION) * RAPID_DETERIORATION_PCT_PER_RANK
+end
+
+-- Cast time of a DoT for THIS character, talents included. 0 means instant.
+function M:DotCastTime(spell)
+    local t = DOT_CAST_TIME[spell]
+    if not t then return 0 end
+    if spell == "Corruption" then
+        t = t - 0.4 * self:TalentRank(TALENT_IMP_CORRUPTION)
+    elseif spell == "Immolate" then
+        t = t - 0.1 * self:TalentRank(TALENT_BANE)
+    end
+    if t < 0 then t = 0 end
+    return t
 end
 
 -- Dark Harvest's own channel length, scaled by Rapid Deterioration exactly
@@ -722,6 +776,17 @@ function M:ApplyDot(spellName, texFrag, interval)
     -- Immune to this one: report it as handled so the DoT chain moves on to the
     -- next spell instead of stopping here for the rest of the fight.
     if self:DotImmune(spellName) then return "up" end
+    -- Moving, and this one is not instant: skip it and let the chain carry on to
+    -- the DoTs that ARE instant, then to the filler.
+    --
+    -- Reported as "up" rather than "wait" deliberately. "wait" returns from the
+    -- whole rotation, which is the stall being fixed here; "up" means "nothing to
+    -- do about this one", which is exactly true while running.
+    if self:DotCastTime(spellName) > 0 and Aegis_SBR:Moving() then
+        if self:Tracing() then self:Trace("moving, skipping " .. spellName) end
+        return "up"
+    end
+
     local detectable = (texFrag ~= nil) or Aegis_SBR:CanResolveDebuffNames()
     local id = self:TargetId()
     local rec = self.dotThrottle[spellName]
@@ -776,7 +841,12 @@ function M:Rotate(cfg)
     -- or the filler cannot clip it. The stop event also fires when the target
     -- dies mid-channel; a 16s ceiling guards against a missed stop so the
     -- rotation can never get stuck.
-    if self.channeling and self.chanStart and (GetTime() - self.chanStart) < 16 then return end
+    if self.channeling and self.chanStart and (GetTime() - self.chanStart) < 16 then
+        if self:Tracing() then
+            self:Trace(string.format("STALL channel %.1fs", GetTime() - self.chanStart))
+        end
+        return
+    end
 
     -- Protect a running Dark Harvest channel. While it channels, do nothing so
     -- neither the wand nor any spell clips it. The 30s cooldown is active for
@@ -792,6 +862,9 @@ function M:Rotate(cfg)
     -- CD-ready reading (an early kill) end the protection ahead of time.
     if self.dhEnd and GetTime() < self.dhEnd and self:TargetId() == self.dhTarget then
         if (GetTime() - (self.dhStart or 0)) < 1 or not self:OwnCDReady("Dark Harvest") then
+            if self:Tracing() then
+                self:Trace(string.format("STALL harvest %.1fs left", self.dhEnd - GetTime()))
+            end
             return
         end
     end
@@ -833,8 +906,7 @@ function M:Rotate(cfg)
     -- P1 Drain Life self-heal: your survival comes first. Channels Drain Life
     -- when you drop below the threshold (the drain-tank safety net).
     if cfg.drainLifeSustain and self:KnowsSpell("Drain Life") and hp < (cfg.drainLifeHp or 35) then
-        self:Queue("Drain Life", "filler, self healing")
-        return
+        if self:Queue("Drain Life", "filler, self healing") then return end
     end
 
     -- P2 Health Funnel: keep the pet alive when it drops, but only while you
@@ -842,8 +914,7 @@ function M:Rotate(cfg)
     if cfg.healthFunnel and self:KnowsSpell("Health Funnel")
         and UnitExists("pet") and not UnitIsDead("pet")
         and self:PetHPPct() < (cfg.healthFunnelPetHp or 50) and hp > (cfg.healthFunnelHpMin or 45) then
-        self:Queue("Health Funnel", "pet is hurt")
-        return
+        if self:Queue("Health Funnel", "pet is hurt") then return end
     end
 
     -- P3 Shadowburn execute: instant finish under the execute threshold (costs
@@ -863,8 +934,7 @@ function M:Rotate(cfg)
     -- draining a target you could just finish off with the filler.
     if cfg.useDrainSoul and self:KnowsSpell("Drain Soul") and thp < (cfg.drainSoulHp or 20)
         and (not cfg.keepShards or self:CountSoulShards() < (cfg.shardTarget or 0)) then
-        self:Queue("Drain Soul", "filler channel")
-        return
+        if self:Queue("Drain Soul", "filler channel") then return end
     end
 
     -- Low-mana safety valve. ApplyDot has no notion of cost, so without this a
@@ -959,6 +1029,19 @@ function M:Rotate(cfg)
         local allowed = (not dotsSuppressed) or exempt
         if self:KnowsSpell(sp) and allowed then
             local st = self:ApplyDot(sp, tex, iv)
+            if st == "wait" and self:Tracing() then
+                -- The one early exit that can hold the WHOLE rotation without
+                -- casting anything, which is what a reported "it did nothing for
+                -- two seconds" looks like from outside. Says which of the two
+                -- waits it is: a cast still awaiting confirmation, or the
+                -- interval after a confirmed cast whose debuff is not visible.
+                local rec, pend = self.dotThrottle[sp], self.dotPending[sp]
+                local id = self:TargetId()
+                local kind = "?"
+                if pend and pend.id == id then kind = string.format("unconfirmed %.1fs", GetTime() - pend.t)
+                elseif rec and rec.id == id then kind = string.format("throttle %.1fs of %ds", GetTime() - rec.t, iv) end
+                self:Trace("STALL dot " .. sp .. " " .. kind)
+            end
             if st == "cast" or st == "wait" then return end
             -- "up": continue to the next DoT
         end
@@ -991,7 +1074,10 @@ function M:Rotate(cfg)
     -- cooldown, otherwise wand-fill the gap (degrading to Shadow Bolt if no
     -- wand is equipped) so the rotation is never idle between channels.
     if cfg.filler == "Dark Harvest" and self:KnowsSpell("Dark Harvest") then
-        if self:OwnCDReady("Dark Harvest") then
+        -- Moving is handled here rather than at the Queue below, because that
+        -- branch returns either way: refused there, the press would be spent on
+        -- nothing instead of falling through to the gap filler.
+        if self:OwnCDReady("Dark Harvest") and not self:Moving() then
             -- Every enabled DoT is already up at this point (the loop above
             -- only falls through once none of them needed casting). Before
             -- committing to the channel, make sure none of them will fall off
@@ -1052,15 +1138,13 @@ function M:Rotate(cfg)
             local dhLeft = self:OwnCDLeft("Dark Harvest")
             local dotSafe = not self:DotExpiringSoonBy(order, dsLen)
             if dotSafe and dhLeft >= dsLen then
-                self:Queue("Drain Soul", "filler channel")
-                return
+                if self:Queue("Drain Soul", "filler channel") then return end
             end
             gap = "Shoot"   -- not safe right now, ride the wand until it is
         end
 
         if gap == "Drain Life" and self:KnowsSpell("Drain Life") then
-            self:Queue("Drain Life", "filler, self healing")
-            return
+            if self:Queue("Drain Life", "filler, self healing") then return end
         end
         if gap == "Shadow Bolt" and self:KnowsSpell("Shadow Bolt") then
             self:Queue("Shadow Bolt", "filler nuke")
@@ -1100,8 +1184,7 @@ function M:Rotate(cfg)
         -- the rotation. If one would lapse during it, fall through to the wand
         -- (or Shadow Bolt without one) for this press instead.
         if not self:DotExpiringSoonBy(order, self:DSChannelLength()) then
-            self:Queue("Drain Soul", "filler channel")
-            return
+            if self:Queue("Drain Soul", "filler channel") then return end
         end
         if self:HasWand() then
             if self:Wanding() then return end
@@ -1110,7 +1193,10 @@ function M:Rotate(cfg)
             self:Queue("Shadow Bolt", "filler nuke")
         end
     elseif filler then
-        self:Queue(filler, "filler")
+        if self:Queue(filler, "filler") then return end
+        -- A channel refused because we are moving. Wand instead of standing
+        -- there: it is the one ranged attack that costs nothing to give up.
+        if self:HasWand() and not self:Wanding() then self:Shoot("wanding, moving") end
     end
 end
 
