@@ -314,6 +314,7 @@ function M:Queue(name, reason)
         p.spell = name; p.reason = reason; p.queue = true
         return true
     end
+    Aegis_SBR:NoteSpellCast(name)
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -394,13 +395,46 @@ function M:DebuffUpAny(name)
     return (remain and remain > 0) and true or false
 end
 
+-- Debuffs this client has actually been seen to read back off a target, by
+-- name. Same idea and same reason as stingSeen below: it is a property of the
+-- CLIENT (does SuperWoW resolve the name, does the icon fragment match, does
+-- ClassicAPI answer), not of any one mob, so it is kept for the session.
+M.debuffSeen = {}
+
 function M:MaintainDebuff(name, interval)
     if not self:KnowsSpell(name) then return false end
-    if self:DebuffUpAny(name) then return false end
+    if self:DebuffUpAny(name) then
+        -- Reading it once is the proof that reading works.
+        self:Later(function() self.debuffSeen[name] = true end)
+        return false
+    end
     local id = self:TargetId()
     local rec = self.debuffThrottle[name]
     local now = GetTime()
-    if rec and rec.id == id and rec.t and (now - rec.t) <= (interval or 3) then
+    -- A throttle stamped on a cast the CLIENT threw away is worse than no
+    -- throttle: it says "just applied" about something that never left the bow.
+    -- Out of range, no line of sight and "needs to be in front of you" all
+    -- arrive as an error message rather than in the combat log, so the resist /
+    -- miss handler at the bottom of this file never sees them.
+    if rec and Aegis_SBR.SpellRefusedSince and Aegis_SBR:SpellRefusedSince(name, rec.t) then
+        self.debuffThrottle[name] = nil
+        rec = nil
+    end
+    -- How long to wait before trying again - the same correction the stings
+    -- already carry.
+    --
+    -- The full duration is only the right answer on a client that CANNOT read
+    -- the debuff back off the target: there the timer is the whole knowledge.
+    -- Once it has been read once, the check at the top of this function is the
+    -- authority, and waiting out the duration after it reports "not up" is
+    -- simply wrong. Hunter's Mark waits 110 seconds, so a first application that
+    -- missed, was refused or never left the bow left the target unmarked for
+    -- most of two minutes - reported from play as exactly that.
+    --
+    -- All that is still needed is the beat an applied debuff takes to register.
+    local wait = interval or 3
+    if self.debuffSeen[name] then wait = STING_QUEUE_HOLD end
+    if rec and rec.id == id and rec.t and (now - rec.t) <= wait then
         return false
     end
     if not self:Pick(name, "debuff missing") then return false end
@@ -454,6 +488,15 @@ function M:MaintainSting(name, interval)
     local id = self:TargetId()
     local rec = self.debuffThrottle[name]
     local now = GetTime()
+    -- A throttle stamped on a cast the CLIENT threw away is worse than no
+    -- throttle: it says "just applied" about something that never left the bow.
+    -- Out of range, no line of sight and "needs to be in front of you" all
+    -- arrive as an error message rather than in the combat log, so the resist /
+    -- miss handler at the bottom of this file never sees them.
+    if rec and Aegis_SBR.SpellRefusedSince and Aegis_SBR:SpellRefusedSince(name, rec.t) then
+        self.debuffThrottle[name] = nil
+        rec = nil
+    end
     -- How long to wait before trying again.
     --
     -- The sting's full duration is only the right answer on a client that cannot
@@ -472,6 +515,14 @@ function M:MaintainSting(name, interval)
     if not self:Queue(name, "sting missing") then return false end
     self:Later(function() self.debuffThrottle[name] = { id = id, t = now } end)
     return true
+end
+
+-- Trace decoration: how much of a reapply throttle is left, or "-" when none is
+-- standing. Purely diagnostic.
+function M:ThrottleText(name)
+    local rec = name and self.debuffThrottle[name]
+    if not rec or not rec.t or rec.id ~= self:TargetId() then return "-" end
+    return string.format("%.0fs", GetTime() - rec.t)
 end
 
 -- Trace decoration: what ClassicAPI reports for this sting, or "" when it has
@@ -752,6 +803,10 @@ function M:Rotate(cfg)
                 .. (self:StingRemainText(effectiveSting))) or "-")
             .. " inMelee=" .. (inMeleeNow and "Y" or "n")
             .. " mark=" .. (cfg.useHuntersMark and (self:DebuffUpAny("Hunter's Mark") and "Y" or "n") or "-")
+            -- Seconds still to run on each reapply throttle, which is the one
+            -- state that can make a missing debuff stay missing while every
+            -- other field looks correct.
+            .. " hold=" .. self:ThrottleText("Hunter's Mark") .. "/" .. self:ThrottleText(effectiveSting)
             .. " L&L=" .. (self:HasBuff("Lock and Load") and "Y" or "n")
             .. " auto=" .. (self:AutoShotting() and "Y" or (self.autoShotOn and "assumed" or "N"))
             .. " steady=" .. (cfg.useSteadyShot and (self:SteadyReady() and "ready" or "wait") .. "/" .. self:WeaveSource() or "-")
@@ -1052,6 +1107,14 @@ hunterFrame:RegisterEvent("UNIT_CASTEVENT")                           -- SuperWo
 -- look exactly like a sting that had just landed and not yet registered, so the
 -- reapply throttle sat on it for the sting's whole duration.
 hunterFrame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
+-- The same lines can arrive on the combat channel instead of the spell one,
+-- depending on how the client classifies the shot: a sting is a ranged attack
+-- that applies a debuff, and the two message channels split on exactly that
+-- distinction. Which one carries "Your Serpent Sting missed X." is not something
+-- this code should assume, so both are read and the SAME narrow matcher decides
+-- - only a line naming one of our own tracked shots does anything at all. If the
+-- message never arrives here, registering it costs nothing.
+hunterFrame:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 hunterFrame:SetScript("OnEvent", function()
     if event == "PLAYER_REGEN_ENABLED" then
         M.autoShotOn = false
@@ -1063,7 +1126,7 @@ hunterFrame:SetScript("OnEvent", function()
         M.stingImmune = {}
         M.stingTry = nil
         M.stingQueuedT = nil
-    elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" then
+    elseif event == "CHAT_MSG_SPELL_SELF_DAMAGE" or event == "CHAT_MSG_COMBAT_SELF_MISSES" then
         -- "Your Serpent Sting was resisted by X." / "... missed X." The throttle
         -- exists to stop a second cast while the first is still registering on
         -- the target; a resist or a miss means there is nothing to register, so

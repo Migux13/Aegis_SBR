@@ -28,6 +28,17 @@ local HM_RENEW    = 7
 local ZEAL_RENEW  = 12
 local ZEAL_STACKS = 3
 
+-- How long you must have been standing still before Consecration is allowed.
+--
+-- Not zero, and that is the correction. "Not moving right now" is true for the
+-- fraction of a second between two steps of repositioning, so a check without a
+-- dwell drops the patch into exactly the gap the switch exists to avoid.
+--
+-- Two seconds against an eight second patch: long enough that a step is not
+-- mistaken for a stand, short enough that a real fight never waits for it -
+-- you are stationary the moment melee starts.
+local CONSEC_DWELL = 2
+
 -- Absolute-mana downrank thresholds (Turtle WoW), mirroring the proven
 -- ExAutoCSHS tables. Cast the lowest-numbered rank whose ceiling the current
 -- raw mana is under; at or above the last ceiling, use full rank. These are
@@ -447,6 +458,43 @@ function M:NormalizeProfile(c)
     -- range requirement is the control: step out of melee and the rotation is
     -- an ordinary healing rotation again.
     if c.hsPriority == nil then c.hsPriority = false end
+    -- Damage fillers for heal mode, both off by default and both LAST in the
+    -- order - below the healing, below the seal work, below everything the
+    -- healer tab exists for. They only ever take a press nothing else wanted.
+    --
+    -- Hammer of Wrath is nearly free: instant, on its own cooldown, and only
+    -- legal inside the execute window, so it cannot compete with a heal it
+    -- would otherwise have been.
+    --
+    -- Consecration is the one with a cost, which is why it is separate. It
+    -- spends real mana and it makes threat on everything standing in it - as a
+    -- healer that is a decision, not a bonus.
+    -- Consecration held while you are moving, on every tab.
+    --
+    -- ON by default, which is the exception to this file's usual "new switches
+    -- start off". Reported from play: when you are moving the mobs are usually
+    -- moving too, so the patch lands on ground everyone is about to leave - the
+    -- mana is spent, the damage is not dealt, and the threat lands on nothing.
+    -- The behaviour it replaces is the accident, not the feature.
+    --
+    -- Turning it off restores casting on cooldown regardless. A tank who
+    -- repositions constantly may well want that: Consecration is threat, and a
+    -- held cast is threat not made.
+    --
+    -- Where movement cannot be measured at all (no SuperWoW) Moving() answers
+    -- "standing still", so this switch simply never blocks anything.
+    if c.consecStill == nil then c.consecStill = true end
+    if c.healFillerHoW == nil then c.healFillerHoW = false end
+    if c.healFillerConsec == nil then c.healFillerConsec = false end
+    if c.healFillerExo == nil then c.healFillerExo = false end
+    -- Below this share of mana the fillers stop entirely and what is left is
+    -- kept for healing. Asked for from play, and it is the right shape: the
+    -- fillers are free only while mana is not the constraint, and the moment it
+    -- is, every point of it belongs to the group.
+    --
+    -- Independent of the melee tabs' mana management, which latches and is about
+    -- pacing a damage rotation. This is one line and it does one thing.
+    if c.healFillerMana == nil then c.healFillerMana = 40 end
     -- Split the old single heal-weave toggle into two independent behaviours
     -- (CS reload of Holy Shock, and Holy Strike filler), then retire it.
     if c.healReloadCS == nil then c.healReloadCS = (c.healWeaveStrikes ~= false) end
@@ -2338,6 +2386,50 @@ function M:Rotate(cfg)
         -- and heals nobody, it only shortens a cooldown.
         if self:HealStrikeEngine(cfg) then return end
         if self:HealJudgeBuff(cfg) then return end
+
+        -- Damage fillers, last of everything and opt-in. A press reaching here
+        -- was not wanted by the healing, the seal, the judgement, the splash or
+        -- the Holy Shock reload - so it is genuinely spare.
+        --
+        -- Spare presses are not spare MANA, though. Below the filler threshold
+        -- none of them run and what is left is saved for healing.
+        --
+        -- Hammer of Wrath first: it is instant, so it costs the least of the
+        -- two, and its window closes on its own.
+        -- Deliberately NOT gated on the Tank/DPS spell toggles: those belong to
+        -- the melee tabs, and a checkbox on the Healer tab that silently does
+        -- nothing because of a setting on another page is a trap.
+        local fillerMana = cfg.healFillerMana or 0
+        local fillersOK = (fillerMana <= 0) or (self:ManaPct() > fillerMana)
+
+        if fillersOK and cfg.healFillerHoW and self:KnowsSpell("Hammer of Wrath")
+            and self:TargetHPPct() <= 20 and self:IsReady("Hammer of Wrath")
+            and self:Affordable("Hammer of Wrath")
+            and Aegis_SBR:SpellReaches("Hammer of Wrath", "target") then
+            if self:Pick("Hammer of Wrath", "heal filler") then return end
+        end
+
+        -- Consecration burns the ground around YOU, so melee range is required
+        -- here exactly as it is in the damage rotation - cast at thirty yards it
+        -- lands on empty floor and still spends the press. Held during mana
+        -- recovery unless the same opt-out the damage rotation uses is set: as a
+        -- healer the mana it costs is heals you will not be casting.
+        -- Exorcism next: a single strong nuke against Undead and Demon targets,
+        -- on its own cooldown, so it competes with nothing.
+        if fillersOK and cfg.healFillerExo and self:KnowsSpell("Exorcism")
+            and self:TargetIsUndeadOrDemon() and self:IsReady("Exorcism")
+            and self:Affordable("Exorcism")
+            and Aegis_SBR:SpellReaches("Exorcism", "target") then
+            if self:Pick("Exorcism", "heal filler") then return end
+        end
+
+        if fillersOK and cfg.healFillerConsec and self:InMeleeRange()
+            and (not self.manaMgmtActive or cfg.consecInMana)
+            and (not cfg.consecStill or Aegis_SBR:StillFor(CONSEC_DWELL))
+            and self:KnowsSpell("Consecration") and self:IsReady("Consecration")
+            and self:Affordable("Consecration") then
+            if self:Pick("Consecration", "heal filler") then return end
+        end
     end
 
     if self:Tracing() then
@@ -2531,6 +2623,7 @@ function M:Rotate(cfg)
     -- ability below it.
     if not cfg.healMode and cfg.spells.consecration and self:InMeleeRange()
         and (not self.manaMgmtActive or cfg.consecInMana)
+        and (not cfg.consecStill or Aegis_SBR:StillFor(CONSEC_DWELL))
         and self:KnowsSpell("Consecration") and self:IsReady("Consecration") then
         if self:Pick("Consecration", "AoE") then return end
     end
