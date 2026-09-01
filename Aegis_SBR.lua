@@ -17,7 +17,7 @@
 -- ============================================================
 
 Aegis_SBR = {
-    ver = "1.2.4",
+    ver = "1.2.5",
     classes = {},     -- token -> module table
     active = nil,      -- the module for this character's class
     Loaded = false,
@@ -327,6 +327,7 @@ function Aegis_SBR:Pick(name, reason)
     -- Counts real presses. The preview window uses it to know when the answer
     -- has legitimately changed, instead of redrawing on every sub-second wobble.
     Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    Aegis_SBR:NoteSpellCast(name)
     CastSpellByName(name)
     return true
 end
@@ -343,6 +344,7 @@ function Aegis_SBR:PickQueue(name, reason)
     -- Counts real presses. The preview window uses it to know when the answer
     -- has legitimately changed, instead of redrawing on every sub-second wobble.
     Aegis_SBR.pressSeq = (Aegis_SBR.pressSeq or 0) + 1
+    Aegis_SBR:NoteSpellCast(name)
     if QueueSpellByName then QueueSpellByName(name) else CastSpellByName(name) end
     return true
 end
@@ -1019,6 +1021,72 @@ function Aegis_SBR:CmdGobbo()
         .. ", " .. learned .. " of " .. GOBBO_SLOTS .. " builds learned.")
 end
 
+-- Are we moving?
+--
+-- Shared: the warlock refuses to start a channel while moving, and the paladin
+-- refuses to drop Consecration on ground it is about to leave.
+--
+-- 1.12 has no speed API, so this is measured the way the movement-speed addons
+-- do it: our own position, sampled and differenced. SuperWoW's UnitPosition
+-- resolves for players, which is all this needs.
+--
+-- Answers FALSE when it cannot tell - no SuperWoW, no reading yet. "Cannot
+-- judge" must never block a cast; the same rule the range checks follow.
+--
+-- The sample interval is what makes it stable. Two presses can be a tenth of a
+-- second apart, and over that gap a walking character barely moves, so
+-- differencing every press would read as standing still half the time.
+local MOVE_SAMPLE = 0.2
+-- Yards of drift tolerated. Position readings jitter slightly while stationary,
+-- and a knockback or a fear is genuinely movement, so this is small.
+local MOVE_EPS = 0.15
+
+function Aegis_SBR:Moving()
+    if not UnitPosition then return false end
+    local x, y = UnitPosition("player")
+    if not x or not y then return false end
+    local now = GetTime()
+    local s = self.moveSample
+    if not s then
+        self.moveSample = { x = x, y = y, t = now, moving = false }
+        return false
+    end
+    -- Between samples, the last answer stands rather than being recomputed off
+    -- a stale reference point.
+    if (now - s.t) < MOVE_SAMPLE then return s.moving end
+    local dx, dy = x - s.x, y - s.y
+    s.x, s.y, s.t = x, y, now
+    s.moving = (dx * dx + dy * dy) > (MOVE_EPS * MOVE_EPS)
+    -- When the standing still began, for StillFor below.
+    if s.moving then s.since = nil
+    elseif not s.since then s.since = now end
+    return s.moving
+end
+
+-- Have we been standing still for at least this long?
+--
+-- Not the same question as "are we moving", and the difference is the whole
+-- point. Stopping is not a commitment to stay stopped: a step to reposition
+-- puts a fraction of a second of stillness in the middle of moving, and a check
+-- that only asks "moving right now" fires into it. Described from play, exactly
+-- and unkindly: "ah, this person hasn't moved for one second, seems like a good
+-- time to fart gold".
+--
+-- So a ground effect asks for a DWELL, not for a moment. What it buys is a
+-- guess that the next few seconds look like the last few - the only guess
+-- available, since nothing can see where somebody intends to walk.
+--
+-- Answers TRUE when movement cannot be measured at all (no SuperWoW), so this
+-- never becomes a gate that can never open.
+function Aegis_SBR:StillFor(seconds)
+    if not UnitPosition then return true end
+    if self:Moving() then return false end
+    local s = self.moveSample
+    if not s then return true end
+    if not s.since then return false end
+    return (GetTime() - s.since) >= (seconds or 0)
+end
+
 -- Every pet belonging to the given player units, appended in the same order.
 --
 -- Dispelling only. Pets carry poisons, diseases and curses like anybody else and
@@ -1091,19 +1159,60 @@ local CAST_REFUSED = {
     SPELL_FAILED_LINE_OF_SIGHT or "Target not in line of sight",
     SPELL_FAILED_OUT_OF_RANGE or "Out of range",
     SPELL_FAILED_TOO_CLOSE or "Target too close",
+    SPELL_FAILED_UNIT_NOT_INFRONT or "Target needs to be in front of you",
+    SPELL_FAILED_MOVING or "Can't do that while moving",
 }
 
+-- Spells the client has just refused, by name, with the time it said so.
+--
+-- Separate from castBlocked above, which is about a UNIT and is used to stop
+-- picking somebody unreachable. This one is about the SPELL, and exists because
+-- several modules keep a "we just cast this, do not send it again" throttle -
+-- which is correct after a cast that happened, and wrong after one the client
+-- threw away. Hunter's Mark carries a 110 second throttle and the first Serpent
+-- Sting of a session fifteen: refused once at the start of a pull, either goes
+-- unapplied for that long. Reported exactly that way.
+Aegis_SBR.spellRefused = {}
+
+-- Was this spell refused at or after the moment `t` - the moment a throttle was
+-- stamped? Timestamps rather than ordering, because the error and the stamp can
+-- land in either order within one frame and both must give the same answer.
+function Aegis_SBR:SpellRefusedSince(name, t)
+    if not name or not t then return false end
+    local r = self.spellRefused[name]
+    return (r and r >= t) and true or false
+end
+
+-- Remember what we just sent, so an error message that names no spell can be
+-- attributed to it. Called by the shared Pick/PickQueue and by the class
+-- wrappers that cast directly.
+function Aegis_SBR:NoteSpellCast(name)
+    self.lastSpell = name
+    self.lastSpellAt = GetTime()
+end
+
 function Aegis_SBR:OnCastError(msg)
-    if not msg or not self.lastUnitCast then return end
-    if (GetTime() - (self.lastUnitCastAt or 0)) > BLAME_WINDOW then return end
+    if not msg then return end
+    local refused = false
     for i = 1, table.getn(CAST_REFUSED) do
-        if msg == CAST_REFUSED[i] then
-            self.castBlocked[self.lastUnitCast] = GetTime()
-            -- Spent: one refusal marks one unit, so the next error cannot be
-            -- blamed on the same cast.
-            self.lastUnitCast = nil
-            return
-        end
+        if msg == CAST_REFUSED[i] then refused = true; break end
+    end
+    if not refused then return end
+    local now = GetTime()
+
+    -- The spell, for the throttles that must not treat a thrown-away cast as a
+    -- cast that happened.
+    if self.lastSpell and (now - (self.lastSpellAt or 0)) <= BLAME_WINDOW then
+        self.spellRefused[self.lastSpell] = now
+        self.lastSpell = nil
+    end
+
+    -- The unit, for the heal target selection.
+    if self.lastUnitCast and (now - (self.lastUnitCastAt or 0)) <= BLAME_WINDOW then
+        self.castBlocked[self.lastUnitCast] = now
+        -- Spent: one refusal marks one unit, so the next error cannot be blamed
+        -- on the same cast.
+        self.lastUnitCast = nil
     end
 end
 
